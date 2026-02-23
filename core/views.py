@@ -48,7 +48,6 @@ class CustomTokenRefreshView(TokenRefreshView):
         
         if "refresh" in response.data:
             new_refresh = response.data.pop("refresh")
-            print(new_refresh)
             response.set_cookie(
                 key="refresh",
                 value=new_refresh,

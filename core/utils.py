@@ -7,7 +7,7 @@ FRONTEND_BASE_URL=os.getenv("FRONTEND_BASE_URL")
 
 def send_verification_email(email, token):
     
-    verification_url = f"{FRONTEND_BASE_URL}/register/complete?token={token}&email={email}"
+    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?token={token}&email={email}"
     
     subject = "Let's get you started!"
     

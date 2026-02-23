@@ -16,23 +16,21 @@ DJANGO_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'django.contrib.staticfiles',
-    
-    'corsheaders',
-    'rest_framework',
-    'rest_framework_simplejwt.token_blacklist',
-
-    'core',
-    'users',
+    'django.contrib.staticfiles',    
 ]
 
 AUTH_USER_MODEL = u'users.CustomUser'
 
 THIRD_PARTY_APPS = [
+    'corsheaders',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
-LOCAL_APPS = []
+LOCAL_APPS = [
+    'core',
+    'users',
+]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
