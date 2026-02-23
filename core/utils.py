@@ -1,8 +1,13 @@
+import os
+from dotenv import load_dotenv
 from django.core.mail import EmailMessage
+
+load_dotenv()
+FRONTEND_BASE_URL=os.getenv("FRONTEND_BASE_URL")
 
 def send_verification_email(email, token):
     
-    verification_url = f"http://localhost:8000/api/verify-link?token={token}&email={email}"
+    verification_url = f"{FRONTEND_BASE_URL}/register/complete?token={token}&email={email}"
     
     subject = "Let's get you started!"
     
