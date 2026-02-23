@@ -117,7 +117,6 @@ class UserRegistrationAPIView(CreateAPIView):
             return Response({"detail": "Email not provided"}, status=status.HTTP_400_BAD_REQUEST)
         
         if (EmailVerification.objects.filter(verification_token=verify_token, updated_at__gte=timezone.now()-timedelta(minutes=15), isDeleted=False).exists()):
-            EmailVerification.objects.filter(email=email).delete()
             request.data.pop("token")
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
@@ -133,6 +132,8 @@ class UserRegistrationAPIView(CreateAPIView):
                 samesite="Strict",
                 path="/api/"
             )
+            
+            EmailVerification.objects.filter(email=email).delete()
             
             return response
 
@@ -158,13 +159,13 @@ class EmailVerifyTokenGenerateAPIView(APIView):
                 return Response({"detail": "Mail already sent to your email"}, status=status.HTTP_200_OK)
             
             else:    
+                send_verification_email(email=email, token=verify_token.verification_token)
                 verify_token.verification_token = uuid4()
                 verify_token.save(update_fields=["verification_token", "updated_at"])
-                send_verification_email(email=email, token=verify_token.verification_token)
                 return Response(status=status.HTTP_200_OK)
         
+        send_verification_email(email=email, token=verification.verification_token)
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         verification = serializer.save()
-        send_verification_email(email=email, token=verification.verification_token)
         return Response(status=status.HTTP_200_OK)
