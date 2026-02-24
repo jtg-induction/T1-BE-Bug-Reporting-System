@@ -12,6 +12,8 @@ class UserSerializer(serializers.ModelSerializer):
     while allowing modifications to personal details.
     """
 
+    is_owner = serializers.SerializerMethodField()
+
     class Meta:
         """
         Metadata options for UserSerializer.
@@ -22,10 +24,11 @@ class UserSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "email",
-            "date_of_birth",
             "designation",
             "phone",
             "jiraID",
+            "date_of_birth",
+            "is_owner",
         ]
         read_only_fields = ["email", "jiraID"]
 
@@ -45,3 +48,9 @@ class UserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(errors)
 
         return data
+
+    def get_is_owner(self, obj):
+        print(self.context)
+        if obj.id == self.context["user_id"]:
+            return True
+        return False

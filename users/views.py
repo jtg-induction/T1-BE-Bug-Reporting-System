@@ -15,14 +15,15 @@ class UserAPIView(viewsets.ViewSet):
 
     def retrieve(self, request, pk=None):
         target_user = get_object_or_404(User, pk=pk)
-        serializer = UserSerializer(target_user)
+        data = {"user_id": request.user.id}
+        serializer = UserSerializer(target_user, context=data)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def update(self, request, pk=None):
         if str(request.user.id) != pk:
             raise PermissionDenied("You can only update your own profile.")
-
-        serializer = UserSerializer(request.user, data=request.data, partial=True)
+        data = {"user_id": request.user.id}
+        serializer = UserSerializer(request.user, data=request.data, partial=True, context=data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
