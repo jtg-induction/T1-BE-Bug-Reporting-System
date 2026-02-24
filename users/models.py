@@ -5,9 +5,10 @@ from django.contrib.auth.models import BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.core.validators import MinLengthValidator
 from django.db import models
+from core.models import SoftDeleteManager
 import uuid
 
-class UserManager(BaseUserManager):
+class UserManager(SoftDeleteManager, BaseUserManager):
 
    def create_user(self, email, password=None, **extra_fields):
        if not email:
@@ -46,10 +47,9 @@ class CustomUser(BaseModel, AbstractBaseUser, PermissionsMixin):
    is_active = models.BooleanField(default=True)
    jiraID=models.CharField(max_length=128, unique=True)
 
-
    objects = UserManager()
    USERNAME_FIELD = "email"
-   REQUIRED_FIELDS = ["first_name", "last_name", "designation"]
+   REQUIRED_FIELDS = ["first_name", "last_name", "designation", "jiraID"]
 
 
    def __str__(self):

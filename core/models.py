@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 import uuid
 
 class SafeDeleteQuerySet(models.QuerySet):
@@ -6,23 +7,34 @@ class SafeDeleteQuerySet(models.QuerySet):
     def delete(self):
         return self.update(isDeleted=True)
     
+    def hard_delete(self):
+        return super().delete()
     
-class SoftDeleteManager(models.Manager):
+class SoftDeleteManager(models.Manager.from_queryset(SafeDeleteQuerySet)):
     
     def get_queryset(self):
-        return SafeDeleteQuerySet(self.model, using=self._db)
+        return super().get_queryset()
 
 class BaseModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+       settings.AUTH_USER_MODEL,
+       null=True,
+       blank=True,
+       on_delete=models.SET_NULL,
+       related_name="updated_%(class)s_set"
+   )
+    isDeleted = models.BooleanField(default=False)
     
     def delete(self):
         self.isDeleted = True
-        self.save()
+        self.save(update_fields=["isDeleted"])
+        
+    def hard_delete(self):
+        super().delete()
         
     objects = SoftDeleteManager()
-
-    created_at = models.DateTimeField(auto_now=True)
-    updated_at = models.DateTimeField(auto_now_add=True)
-    isDeleted = models.BooleanField(default=False)
 
     class Meta:
         abstract = True
