@@ -11,7 +11,7 @@ Activate the virtualenv for your project.
 
 Install project dependencies:
 
-    $ pip install -r requirements.txt
+    $ pipenv install
 
 Then simply apply the migrations:
 
