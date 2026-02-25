@@ -20,6 +20,7 @@ class UserMeAPIViewTestCase(APITestCase):
             password="tester",
             designation="M",
             jiraID="abcd",
+            jira_access_token="test_access_token",
         )
         self.user2 = User.objects.create_user(
             first_name="test2",
@@ -28,6 +29,7 @@ class UserMeAPIViewTestCase(APITestCase):
             password="tester2",
             designation="M",
             jiraID="abcde",
+            jira_access_token="test_access_token2",
         )
 
         response = self.client.post(
@@ -49,7 +51,7 @@ class UserMeAPIViewTestCase(APITestCase):
         self.assertEqual(self.user.first_name, data["first_name"])
         self.assertEqual(self.user.last_name, data["last_name"])
         self.assertEqual(self.user.email, data["email"])
-        self.assertEqual(str(self.user.id), data["user_id"])
+        self.assertEqual(str(self.user.id), data["id"])
         self.assertEqual(200, response.status_code)
 
 
@@ -67,6 +69,7 @@ class UserProfileAPIViewTestCase(APITestCase):
             designation="M",
             jiraID="abcd",
             phone="1234567890",
+            jira_access_token="test_access_token",
         )
         self.user2 = User.objects.create_user(
             first_name="test2",
@@ -76,6 +79,7 @@ class UserProfileAPIViewTestCase(APITestCase):
             designation="M",
             jiraID="abcde",
             phone="1234567891",
+            jira_access_token="test_access_token2",
         )
 
         self.url = reverse("users:user-detail", kwargs={"pk": self.user.pk})
@@ -100,7 +104,6 @@ class UserProfileAPIViewTestCase(APITestCase):
         self.assertEqual(self.user.email, data["email"])
         self.assertEqual(self.user.designation, data["designation"])
         self.assertEqual(self.user.phone, data["phone"])
-        self.assertEqual(self.user.jiraID, data["jiraID"])
         self.assertEqual(self.user.date_of_birth, data["date_of_birth"])
         self.assertEqual(200, response.status_code)
         self.assertTrue(data["is_owner"])
@@ -134,7 +137,6 @@ class UserProfileAPIViewTestCase(APITestCase):
         self.assertEqual(self.user.email, data["email"])
         self.assertEqual(self.user.designation, data["designation"])
         self.assertEqual(self.user.phone, data["phone"])
-        self.assertEqual(self.user.jiraID, data["jiraID"])
         self.assertEqual(self.user.date_of_birth, data["date_of_birth"])
         self.assertEqual(200, response.status_code)
         self.assertFalse(data["is_owner"])
@@ -165,5 +167,4 @@ class UserProfileAPIViewTestCase(APITestCase):
         self.assertEqual(before_update["email"], after_update["email"])
         self.assertEqual(before_update["designation"], after_update["designation"])
         self.assertEqual(before_update["phone"], after_update["phone"])
-        self.assertEqual(before_update["jiraID"], after_update["jiraID"])
         self.assertEqual(before_update["date_of_birth"], after_update["date_of_birth"])
