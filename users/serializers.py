@@ -51,6 +51,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_is_owner(self, obj):
         print(self.context)
-        if obj.id == self.context["user_id"]:
+        user = self.context["user"]
+        if obj.id == user.id:
             return True
         return False
