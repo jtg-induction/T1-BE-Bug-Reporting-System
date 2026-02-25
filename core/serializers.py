@@ -58,7 +58,8 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             last_name=validated_data["last_name"],
             phone=validated_data["phone"],
             designation=validated_data["designation"],
-            jiraID=validated_data["jiraID"]
+            jiraID=validated_data["jiraID"],
+            jira_access_token=validated_data["jira_access_token"]
         )
         return user
 
