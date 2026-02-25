@@ -21,16 +21,16 @@ class UserSerializer(serializers.ModelSerializer):
 
         model = User
         fields = [
+            "id",
             "first_name",
             "last_name",
             "email",
-            "designation",
             "phone",
-            "jiraID",
             "date_of_birth",
+            "designation",
             "is_owner",
         ]
-        read_only_fields = ["email", "jiraID"]
+        read_only_fields = ["email"]
 
     def validate(self, data):
         """
@@ -50,7 +50,6 @@ class UserSerializer(serializers.ModelSerializer):
         return data
 
     def get_is_owner(self, obj):
-        print(self.context)
         user = self.context["user"]
         if obj.id == user.id:
             return True
