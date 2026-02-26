@@ -4,9 +4,9 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.core.validators import MinLengthValidator
-from django.db import models
 from core.models import SoftDeleteManager
 import uuid
+from encrypted_model_fields.fields import EncryptedCharField
 
 
 class UserManager(SoftDeleteManager, BaseUserManager):
@@ -24,6 +24,10 @@ class UserManager(SoftDeleteManager, BaseUserManager):
 
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
+        if extra_fields.get("is_staff") is not True:
+            raise ValueError("Superuser must have is_staff=True.")
+        if extra_fields.get("is_superuser") is not True:
+            raise ValueError("Superuser must have is_superuser=True.")
         return self.create_user(email, password, **extra_fields)
 
 
@@ -42,13 +46,13 @@ class CustomUser(BaseModel, AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
-    date_of_birth = models.DateField(null=True, blank=True)
-    phone = models.CharField(max_length=10, null=True, blank=True, validators=[MinLengthValidator(10)])
-    designation = models.CharField(choices=Designation.choices)
+    date_of_birth = models.DateField(null=True)
+    phone = models.CharField(max_length=10, null=True, validators=[MinLengthValidator(10)])
+    designation = models.CharField(max_length=6, choices=Designation.choices)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     jiraID = models.CharField(max_length=128, unique=True)
-    jira_access_token = models.CharField(max_length=256, unique=True)
+    jira_access_token = EncryptedCharField(max_length=256, unique=True)
 
     objects = UserManager()
     USERNAME_FIELD = "email"

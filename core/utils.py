@@ -1,14 +1,20 @@
 import os
 from dotenv import load_dotenv
 from django.core.mail import EmailMessage
+from urllib.parse import urlencode
+import logging
+import smtplib
 
 load_dotenv()
-FRONTEND_BASE_URL=os.getenv("FRONTEND_BASE_URL")
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
+if not FRONTEND_BASE_URL:
+    raise ValueError("FRONTEND_BASE_URL environment variable is not set")
+
+logger = logging.getLogger(__name__)
 
 def send_verification_email(email, token):
-    
-    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?token={token}&email={email}"
-    
+    params = urlencode({"token": token, "email": email})
+    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?{params}"
     subject = "Let's get you started!"
     
     html_content = f"""
@@ -48,4 +54,8 @@ def send_verification_email(email, token):
     )
     
     email_message.content_subtype = "html"
-    email_message.send()
+    
+    try :
+        email_message.send()
+    except smtplib.SMTPException as e:
+        logger.error(f"Email sending failed: {e}")

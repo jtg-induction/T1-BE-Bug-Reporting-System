@@ -63,7 +63,7 @@ class EmailVerifyLinkAPIViewTestCase(APITestCase):
         """
         Test to verify that a post call with invalid passwords
         """
-        response = self.client.post(self.url, query_params={"token": self.verification.verification_token})
+        response = self.client.post(f"{self.url}?token={self.verification.verification_token}")
         self.assertEqual(200, response.status_code)
 
     def test_no_token(self):
@@ -71,12 +71,13 @@ class EmailVerifyLinkAPIViewTestCase(APITestCase):
         self.assertEqual(400, response.status_code)
 
     def test_invalid_token(self):
-        response = self.client.post(self.url, query_params={"token": uuid.uuid4()})
+        response = self.client.post(f"{self.url}?token={uuid.uuid4()}")
         self.assertEqual(401, response.status_code)
 
     def test_email_generation_for_registered_user(self):
         self.verification.isDeleted = True
-        response = self.client.post(self.url, query_params={"token": self.verification.verification_token})
+        self.verification.save(update_fields=["isDeleted"])
+        response = self.client.post(f"{self.url}?token={self.verification.verification_token}")
         self.assertEqual(200, response.status_code)
 
 
@@ -234,7 +235,8 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "date_of_birth": "12-12-1222"
+            "date_of_birth": "12-12-1222",
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(400, response.status_code)

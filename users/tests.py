@@ -20,6 +20,7 @@ class UserUpdateAPIViewTestCase(APITestCase):
         self.jiraID = "abcd"
         self.phone = "1234567890"
         self.dob = "1993-12-03"
+        self.jira_access_token = "dummy-jira-token"
         
         
         User.objects.create_user(
@@ -28,7 +29,8 @@ class UserUpdateAPIViewTestCase(APITestCase):
             email=self.email,
             password=self.password,
             designation=self.designation,
-            jiraID=self.jiraID
+            jiraID=self.jiraID,
+            jira_access_token=self.jira_access_token,
             )
         
         response = self.client.post(self.login, {"email": self.email, "password": self.password})
@@ -100,6 +102,7 @@ class UserGetAPIViewTestCase(APITestCase):
         self.jiraID = "abcd"
         self.phone = "1234567890"
         self.dob = "1993-12-03"
+        self.jira_access_token = "dummy-jira-token"
         
         user = User.objects.create_user(
             first_name=self.first_name,
@@ -107,7 +110,8 @@ class UserGetAPIViewTestCase(APITestCase):
             email=self.email,
             password=self.password,
             designation=self.designation,
-            jiraID=self.jiraID
+            jiraID=self.jiraID,
+            jira_access_token=self.jira_access_token
             )
         
         self.created_at = user.created_at

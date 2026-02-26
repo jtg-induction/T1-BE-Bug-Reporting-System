@@ -15,4 +15,4 @@ django-soft-delete = "==1.0.22"
 [dev-packages]
 
 [requires]
-python_version = "3.9"
+python_version = "3.12"

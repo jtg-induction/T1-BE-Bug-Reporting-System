@@ -45,18 +45,13 @@ class UserRegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop("confirm_password")
 
-        if ("date_of_birth" not in validated_data):
-            validated_data["date_of_birth"] = None
-
-        if ("phone" not in validated_data):
-            validated_data["phone"] = None
-
         user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
             first_name=validated_data["first_name"],
             last_name=validated_data["last_name"],
-            phone=validated_data["phone"],
+            phone=validated_data.get("phone"),
+            date_of_birth=validated_data.get("date_of_birth"),
             designation=validated_data["designation"],
             jiraID=validated_data["jiraID"],
             jira_access_token=validated_data["jira_access_token"]
@@ -68,8 +63,8 @@ class UserEmailVerifySerializer(serializers.ModelSerializer):
 
     class Meta():
         model = EmailVerification
-        fields = ["id", "email", "created_at", "updated_at", "verification_token"]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        fields = ["id", "email", "verification_token", "expires_at"]
+        read_only_fields = ["id", "expires_at"]
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():

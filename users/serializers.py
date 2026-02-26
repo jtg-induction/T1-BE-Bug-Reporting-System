@@ -7,14 +7,16 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["first_name", "last_name", "email", "date_of_birth", "designation", "phone", "jiraID", "created_at", "updated_at"]
-        read_only_fields = ["email", "jiraID", "created_at", "updated_at"]
+        fields = ["first_name", "last_name", "email", "date_of_birth", "designation", "phone", "jiraID"]
+        read_only_fields = ["email", "jiraID"]
         
     def validate(self, data):
         if self.instance:
+            errors = {}
             for field_name in self.Meta.read_only_fields:
                 if field_name in self.initial_data:
-                    raise serializers.ValidationError({
-                        field_name: "This field cannot be updated."
-                    })
+                    errors[field_name] = "This field cannot be updated."
+            if errors:
+                raise serializers.ValidationError(errors)
+    
         return data

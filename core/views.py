@@ -1,4 +1,3 @@
-from datetime import timedelta
 from django.utils import timezone
 from uuid import uuid4
 from rest_framework import status
@@ -7,21 +6,24 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenBlacklistView
-
+from rest_framework.exceptions import ParseError, NotAuthenticated
 from core.serializers import UserRegisterSerializer, UserEmailVerifySerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from core.models import EmailVerification
 from core.utils import send_verification_email
 import os
+from urllib.parse import unquote
 from dotenv import load_dotenv
 load_dotenv()
 
-SECURE = os.getenv("SECURE")
+SECURE = os.getenv("SECURE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
+        if response.status_code != status.HTTP_200_OK or "refresh" not in response.data:
+            return response
         refresh = response.data.pop("refresh")
         
         response.set_cookie(
@@ -74,31 +76,7 @@ class CustomTokenBlacklistView(TokenBlacklistView):
             path="/api/"
         )
         
-        return response
-
-class EmailVerifyAPIView(APIView):
-    
-    permission_classes=[AllowAny]
-    
-    def post(self, request):
-        verify_token = request.query_params.get("token")
-        
-        if not verify_token:
-            return Response({"detail": "Token not provided"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        verification = EmailVerification.objects.filter(verification_token=verify_token).first()
-        
-        if not verification:
-            return Response({"detail": "Invalid Token"}, status=status.HTTP_401_UNAUTHORIZED)
-        
-        elif verification.isDeleted==True:
-            return Response({"detail": "You are already registered. Please login"}, status=status.HTTP_200_OK)
-        
-        elif verification.updated_at < timezone.now() - timedelta(minutes=15):
-            return Response({"detail": "Token Expired"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        return Response(status=status.HTTP_200_OK)
-        
+        return response        
 
 class UserRegistrationAPIView(CreateAPIView):
 
@@ -106,17 +84,20 @@ class UserRegistrationAPIView(CreateAPIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
-        verify_token = request.data.get("token")
-        email = request.data.get("email")
+        verify_token = unquote(request.data.get("token"))
+        email = unquote(request.data.get("email"))
         
         if not verify_token:
-            return Response({"detail": "Token not provided"}, status=status.HTTP_400_BAD_REQUEST)
+            return ParseError("Token not provided", status=status.HTTP_400_BAD_REQUEST)
         
         if not email:
-            return Response({"detail": "Email not provided"}, status=status.HTTP_400_BAD_REQUEST)
+            return ParseError("Email not provided", status=status.HTTP_400_BAD_REQUEST)
         
-        if (EmailVerification.objects.filter(verification_token=verify_token, updated_at__gte=timezone.now()-timedelta(minutes=15), isDeleted=False).exists()):
+        emailVerified = EmailVerification.objects.filter(verification_token=verify_token, email=email, expires_at__gte=timezone.now(), isDeleted=False).first()
+        
+        if (emailVerified):
             request.data.pop("token")
+            request.data["email"] = email
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             user = serializer.save()
@@ -136,7 +117,7 @@ class UserRegistrationAPIView(CreateAPIView):
             
             return response
 
-        return Response({"detail": "Token Expired"}, status=status.HTTP_401_UNAUTHORIZED)
+        return NotAuthenticated("Token Expired", status=status.HTTP_401_UNAUTHORIZED)
         
     
 class EmailVerifyTokenGenerateAPIView(APIView):
@@ -151,20 +132,20 @@ class EmailVerifyTokenGenerateAPIView(APIView):
         if(verify_token):
             
             if(verify_token.isDeleted==True):
-                return Response({"detail": "You are already registered"}, status=status.HTTP_400_BAD_REQUEST)
+                return ParseError("You are already registered", status=status.HTTP_400_BAD_REQUEST)
 
             
-            if(verify_token.updated_at > timezone.now() - timedelta(minutes=15)):
+            if(verify_token.expires_at > timezone.now()):
                 return Response({"detail": "Mail already sent to your email"}, status=status.HTTP_200_OK)
             
-            else:    
-                send_verification_email(email=email, token=verify_token.verification_token)
+            else:
                 verify_token.verification_token = uuid4()
-                verify_token.save(update_fields=["verification_token", "updated_at"])
-                return Response(status=status.HTTP_200_OK)
+                verify_token.save(update_fields=["verification_token"])
+                send_verification_email(email=email, token=verify_token.verification_token)
+                return Response({"detail": "Mail sent to your email"}, status=status.HTTP_200_OK)
         
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         verification = serializer.save()
         send_verification_email(email=email, token=verification.verification_token)
-        return Response(status=status.HTTP_200_OK)
+        return Response({"detail": "Mail sent to your email"}, status=status.HTTP_200_OK)
