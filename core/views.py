@@ -179,6 +179,10 @@ class EmailVerifyTokenGenerateAPIView(APIView):
         Checks for existing valid tokens or creates a new one to send via email.
         """
         email = request.data.get("email")
+        
+        if(EmailVerification.objects.filter(email=email, isDeleted=True).first()):
+            return Response({"detail": "You are already registered"}, status=status.HTTP_400_BAD_REQUEST)
+        
         verify_token = EmailVerification.objects.filter(email=email).first()
 
         if verify_token:

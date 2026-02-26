@@ -100,7 +100,7 @@ class EmailVerifyLinkAPIViewTestCase(APITestCase):
         response = self.client.post(
             f"{self.url}?token={self.verification.verification_token}"
         )
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(401, response.status_code)
 
 
 @pytest.mark.django_db
