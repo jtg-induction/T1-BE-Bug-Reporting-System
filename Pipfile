@@ -11,6 +11,8 @@ pytest-django = "==4.12.0"
 djangorestframework-simplejwt = "==5.5.1"
 python-dotenv = "==1.2.1"
 django-soft-delete = "==1.0.22"
+cryptography = "*"
+django-encrypted-model-fields = "*"
 
 [dev-packages]
 
