@@ -21,6 +21,7 @@ class Project(BaseModel):
                                      through_fields=(
                                          "project",
                                          "member"))
+    owner=models.ForeignKey(settings.AUTH_USER_MODEL, related_name="project_managed", on_delete=models.RESTRICT)
     archived_at = models.DateTimeField(null=True, blank=True)
     key = models.CharField(max_length=50)
     jira_url = models.URLField()
@@ -47,7 +48,7 @@ class ProjectMember(BaseModel):
                           editable=False)
     project = models.ForeignKey(Project, related_name="project_members", on_delete=models.CASCADE)
     member = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="user_projects", on_delete=models.CASCADE)
-    inviter = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="invited_members", on_delete=models.DO_NOTHING)
+    inviter = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="invited_members", on_delete=models.SET_NULL,null=True)
     role = models.IntegerField(choices=Role.choices, default=Role.DEV)
     status = models.IntegerField(choices=Status.choices, default=Status.INVITED)
 
