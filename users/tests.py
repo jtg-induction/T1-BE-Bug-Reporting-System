@@ -7,6 +7,7 @@ User = get_user_model()
 
 
 @pytest.mark.django_db
+<<<<<<< HEAD
 class UserMeAPIViewTestCase(APITestCase):
     url = reverse("users:me")
     login = reverse("core:login")
@@ -56,6 +57,8 @@ class UserMeAPIViewTestCase(APITestCase):
 
 
 @pytest.mark.django_db
+=======
+>>>>>>> 036397d (FS_02: Test cases fixes)
 class UserProfileAPIViewTestCase(APITestCase):
     login = reverse("core:login")
 
