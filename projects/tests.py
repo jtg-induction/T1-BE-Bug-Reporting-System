@@ -44,10 +44,14 @@ class ProjectViewSetTestCase(APITestCase):
             jira_access_token="test_access_token2",
         )
 
-        response = self.client.post(self.login, {"email": "test@testuser.com", "password": "tester"})
+        response = self.client.post(
+            self.login, {"email": "test@testuser.com", "password": "tester"}
+        )
 
         if isinstance(response.data, dict):
-            self.access = response.data.get("access") or response.data.get("data", {}).get("access", "")
+            self.access = response.data.get("access") or response.data.get(
+                "data", {}
+            ).get("access", "")
         else:
             self.access = ""
 
@@ -91,7 +95,9 @@ class ProjectViewSetTestCase(APITestCase):
             status=ProjectMember.Status.ACTIVE,
         )
 
-        self.detail_url = reverse("project-detail", kwargs={"pk": self.active_project.pk})
+        self.detail_url = reverse(
+            "project-detail", kwargs={"pk": self.active_project.pk}
+        )
 
     def _get_actual_data(self, response):
         """
@@ -190,7 +196,9 @@ class ProjectViewSetTestCase(APITestCase):
         Verifies that if Jira rejects the project creation, the local project is not saved.
         """
         mock_post.return_value.status_code = 400
-        mock_post.return_value.json.return_value = {"errorMessages": ["Project key already exists"]}
+        mock_post.return_value.json.return_value = {
+            "errorMessages": ["Project key already exists"]
+        }
 
         data = {
             "title": "Failed Project",
@@ -229,10 +237,14 @@ class ProjectViewSetTestCase(APITestCase):
         """
         Verifies that a user can only see projects they are actively a member of.
         """
-        response = self.client.post(self.login, {"email": "test2@testuser.com", "password": "tester2"})
+        response = self.client.post(
+            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+        )
 
         if isinstance(response.data, dict):
-            access = response.data.get("access") or response.data.get("data", {}).get("access", "")
+            access = response.data.get("access") or response.data.get("data", {}).get(
+                "access", ""
+            )
         else:
             access = ""
 
@@ -244,3 +256,210 @@ class ProjectViewSetTestCase(APITestCase):
         actual_data = self._get_actual_data(response)
 
         self.assertEqual(len(actual_data), 0)
+
+    @patch("requests.put")
+    def test_update_project_success(self, mock_put):
+        mock_put.return_value.status_code = 200
+        mock_put.return_value.json.return_value = {}
+
+        url = reverse("project-detail", args=[self.active_project.id])
+
+        response = self.client.patch(
+            url, {"title": "Updated Title", "description": "Updated Desc"}
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.active_project.refresh_from_db()
+        self.assertEqual(self.active_project.title, "Updated Title")
+
+    def test_update_project_not_admin(self):
+
+        ProjectMember.objects.create(
+            project=self.active_project,
+            member=self.user2,
+            inviter=self.user,
+            role=ProjectMember.Role.DEV,
+            status=ProjectMember.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.user2)
+        url = reverse("project-detail", args=[self.active_project.id])
+        response = self.client.put(url, {"title": "Hack"})
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("requests.put")
+    def test_update_project_jira_error(self, mock_put):
+        mock_put.return_value.status_code = 400
+        mock_put.return_value.json.return_value = {"errorMessages": ["Some Jira error"]}
+
+        url = reverse("project-detail", args=[self.active_project.id])
+        response = self.client.patch(url, {"title": "Fail"})
+
+        self.assertEqual(response.status_code, 400)
+
+    @patch("requests.put")
+    def test_update_project_network_error(self, mock_put):
+        mock_put.side_effect = RequestException("timeout")
+
+        url = reverse("project-detail", args=[self.active_project.id])
+        response = self.client.patch(url, {"title": "Fail"})
+
+        self.assertEqual(response.status_code, 503)
+
+    @patch("requests.post")
+    def test_archive_project_success(self, mock_post):
+        mock_post.return_value.status_code = 204
+
+        url = reverse("project-archive-project", args=[self.active_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.active_project.refresh_from_db()
+        self.assertEqual(self.active_project.status, Project.Status.ARCHIVED)
+
+    def test_archive_already_archived(self):
+        url = reverse("project-archive-project", args=[self.archived_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_archive_not_admin(self):
+        self.client.force_authenticate(self.user2)
+
+        url = reverse("project-archive-project", args=[self.active_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("requests.post")
+    def test_unarchive_project_success(self, mock_post):
+        mock_post.return_value.status_code = 200
+
+        url = reverse("project-unarchive-project", args=[self.archived_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.archived_project.refresh_from_db()
+        self.assertEqual(self.archived_project.status, Project.Status.ACTIVE)
+
+    def test_get_all_members_success(self):
+        url = reverse("project-get-all-members", args=[self.active_project.id])
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(len(response.data) >= 1)
+
+    def test_get_members_not_in_project(self):
+        self.client.force_authenticate(self.user2)
+
+        url = reverse("project-get-all-members", args=[self.active_project.id])
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_available_members_success(self):
+        url = reverse("project-get-available-members", args=[self.active_project.id])
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_available_members_not_admin(self):
+        self.client.force_authenticate(self.user2)
+
+        url = reverse("project-get-available-members", args=[self.active_project.id])
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_invite_member_success(self):
+        url = reverse("project-invite-member", args=[self.active_project.id])
+
+        response = self.client.post(
+            url, {"user_id": self.user2.id, "role": ProjectMember.Role.DEV}
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        exists = ProjectMember.objects.filter(
+            project=self.active_project, member=self.user2
+        ).exists()
+
+        self.assertTrue(exists)
+
+    def test_accept_invite_success(self):
+        ProjectMember.objects.create(
+            project=self.active_project,
+            member=self.user2,
+            inviter=self.user,
+            role=ProjectMember.Role.DEV,
+            status=ProjectMember.Status.INVITED,
+        )
+
+        self.client.force_authenticate(self.user2)
+
+        url = reverse("project-accept-invite", args=[self.active_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+
+        pm = ProjectMember.objects.get(project=self.active_project, member=self.user2)
+
+        self.assertEqual(pm.status, ProjectMember.Status.ACTIVE)
+
+    def test_reject_invite_success(self):
+        ProjectMember.objects.create(
+            project=self.active_project,
+            member=self.user2,
+            inviter=self.user,
+            role=ProjectMember.Role.DEV,
+            status=ProjectMember.Status.INVITED,
+        )
+
+        self.client.force_authenticate(self.user2)
+
+        url = reverse("project-reject-invite", args=[self.active_project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+
+        pm = ProjectMember.objects.get(project=self.active_project, member=self.user2)
+
+        self.assertEqual(pm.status, ProjectMember.Status.REJECTED)
+
+    def test_revoke_member_success(self):
+        ProjectMember.objects.create(
+            project=self.active_project,
+            member=self.user2,
+            inviter=self.user,
+            role=ProjectMember.Role.DEV,
+            status=ProjectMember.Status.ACTIVE,
+        )
+
+        url = reverse("project-revoke-member", args=[self.active_project.id])
+
+        response = self.client.post(url, {"user_id": self.user2.id})
+
+        self.assertEqual(response.status_code, 200)
+
+        pm = ProjectMember.objects.get(project=self.active_project, member=self.user2)
+
+        self.assertEqual(pm.status, ProjectMember.Status.REVOKED)
+
+    def test_change_role_success(self):
+        ProjectMember.objects.create(
+            project=self.active_project,
+            member=self.user2,
+            inviter=self.user,
+            role=ProjectMember.Role.DEV,
+            status=ProjectMember.Status.ACTIVE,
+        )
+
+        url = reverse("project-change-role", args=[self.active_project.id])
+
+        response = self.client.post(url, {"user_id": self.user2.id, "role": 1})
+
+        self.assertEqual(response.status_code, 200)
+
+        pm = ProjectMember.objects.get(project=self.active_project, member=self.user2)
+
+        self.assertEqual(pm.role, ProjectMember.Role.ADMIN)
