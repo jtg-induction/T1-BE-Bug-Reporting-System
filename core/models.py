@@ -17,6 +17,8 @@ class SafeDeleteQuerySet(models.QuerySet):
         """
         Updates the isDeleted flag to True instead of removing records.
         """
+        for obj in self:
+            obj.delete()
         self.update(isDeleted=True)
 
     def hard_delete(self, using=None, keep_parents=False):
@@ -66,6 +68,14 @@ class BaseModel(models.Model):
         """
         self.isDeleted = True
         self.save(update_fields=["isDeleted", "updated_at"], using=using)
+        for related_object in self._meta.related_objects:
+            if related_object.on_delete == models.CASCADE and issubclass(
+                related_object.related_model, BaseModel
+            ):
+                related_queryset = getattr(
+                    self, related_object.get_accessor_name()
+                ).all()
+                related_queryset.delete()
 
     def hard_delete(self, using=None, keep_parents=False):
         """

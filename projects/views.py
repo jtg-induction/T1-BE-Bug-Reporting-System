@@ -2,7 +2,7 @@ import logging
 
 import requests
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import models, transaction
 from requests.auth import HTTPBasicAuth
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -43,29 +43,24 @@ class ProjectViewSet(
         return ProjectSerializer
 
     def get_queryset(self):
-        """
-        Returns a queryset of active projects where the currently authenticated user
-        is an active member.
-        """
-        return Project.objects.filter(
+        archive_filter = models.Q(
+            status=Project.Status.ARCHIVED,
+            project_members__role=ProjectMember.Role.ADMIN,
+            project_members__member=self.request.user,
+            project_members__status=ProjectMember.Status.ACTIVE,
+        )
+        active_filter = models.Q(
             status=Project.Status.ACTIVE,
             project_members__member=self.request.user,
             project_members__status=ProjectMember.Status.ACTIVE,
         )
-
-    @action(detail=False, methods=["get"], url_path="archived")
-    def archived_projects(self, request):
-        """
-        Custom endpoint to retrieve a list of archived projects
-        where the current user is an active member.
-        """
-        archived_qs = Project.objects.filter(
-            status=Project.Status.ARCHIVED,
-            project_members__member=request.user,
-            project_members__status=ProjectMember.Status.ACTIVE,
-        )
-        serializer = self.get_serializer(archived_qs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        projects = Project.objects.distinct()
+        status = self.request.GET.get("status", None)
+        if self.action == "retrieve":
+            return projects.filter(archive_filter | active_filter)
+        elif self.action == "list" and status == "archived":
+            return projects.filter(archive_filter)
+        return projects.filter(active_filter)
 
     def create(self, request, *args, **kwargs):
         """
