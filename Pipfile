@@ -14,6 +14,7 @@ django-soft-delete = "==1.0.22"
 cryptography = "46.0.5"
 django-encrypted-model-fields = "0.6.5"
 requests = "==2.32.5"
+django-filter = "==25.2"
 
 [dev-packages]
 

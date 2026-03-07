@@ -3,15 +3,18 @@ import logging
 import requests
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
+from django_filters.rest_framework import DjangoFilterBackend
 from requests.auth import HTTPBasicAuth
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ParseError, PermissionDenied
+from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.tasks import send_invitation_email
 from core.utils import JiraClient, JiraClientException
+from projects.filters import ProjectFilter, ProjectMemberFilter
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectMemberSerializer, ProjectSerializer
 from users.serializers import UserSerializer
@@ -34,6 +37,78 @@ class ProjectViewSet(
     """
 
     permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = [
+        "key",
+        "title",
+        "project_members__role",
+        "member__first_name",
+        "member__last_name",
+        "member__email",
+        "member__designation",
+        "role",
+    ]
+
+    field_maps = {
+        "list": {
+            "key": "key",
+            "title": "title",
+            "project_role": "project_members__role",
+        },
+        "get_all_members": {
+            "first_name": "member__first_name",
+            "last_name": "member__last_name",
+            "email": "member__email",
+            "designation": "member__designation",
+            "role": "role",
+        },
+    }
+
+    def filter_queryset(self, queryset):
+
+        params = self.request.query_params.copy()
+        mapping = self.field_maps.get(self.action, {})
+
+        new_params = {}
+
+        for key, value in params.items():
+            if key == "ordering":
+                desc = value.startswith("-")
+                field = value.lstrip("-")
+
+                mapped = mapping.get(field)
+
+                if mapped:
+                    value = f"-{mapped}" if desc else mapped
+
+                new_params[key] = value
+                continue
+
+            parts = key.split("__")
+            field = parts[0]
+            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
+
+            mapped = mapping.get(field)
+
+            if mapped:
+                new_key = mapped
+                if lookup:
+                    new_key = f"{mapped}__{lookup}"
+                new_params[new_key] = value
+            else:
+                new_params[key] = value
+
+        request = self.request._request
+        request.GET = request.GET.copy()
+        request.GET.clear()
+        request.GET.update(new_params)
+
+        if self.action == "get_all_members":
+            self.filterset_class = ProjectMemberFilter
+        else:
+            self.filterset_class = ProjectFilter
+
+        return super().filter_queryset(queryset)
 
     def get_serializer_class(self):
         if self.action == "get_all_members":
@@ -433,6 +508,12 @@ class ProjectViewSet(
 
         if not members:
             raise NotFound("Project does not exist")
+
+        members = self.filter_queryset(members)
+        page = self.paginate_queryset(members)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context={"user": user})
+            return self.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)

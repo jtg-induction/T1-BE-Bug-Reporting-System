@@ -24,7 +24,7 @@ AUTH_USER_MODEL = "users.CustomUser"
 THIRD_PARTY_APPS = [
     "corsheaders",
     "rest_framework",
-    "rest_framework_simplejwt.token_blacklist",
+    "django_filters",
 ]
 
 LOCAL_APPS = [
@@ -97,7 +97,11 @@ REST_FRAMEWORK = {
         "core.renderers.GlobalJSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
-    "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardResultsSetPagination",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "DEFAULT_FILTER_BACKENDS": [
+        "rest_framework.filters.OrderingFilter",
+        "django_filters.rest_framework.DjangoFilterBackend",
+    ],
 }
 
 SIMPLE_JWT = {
