@@ -1,20 +1,26 @@
+import uuid
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
-from core.models import EmailVerification
 from rest_framework.test import APITestCase
-import uuid
+
+from core.models import EmailVerification
 
 User = get_user_model()
 
 
 @pytest.mark.django_db
 class EmailLinkGenerateAPIViewTestCase(APITestCase):
-    url = reverse('core:generate-email-link')
+    """
+    Tests for the email verification link generation endpoint.
+    """
+
+    url = reverse("core:generate-email-link")
 
     def test_email_link_generation(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test that a verification email is successfully generated for a new email.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -24,7 +30,8 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
 
     def test_email_link_re_generation_without_expiry(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test that requesting a link again before the old one expires returns a
+        message indicating the mail was already sent.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -38,7 +45,8 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
 
     def test_email_link_generation_for_registered_user(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test that email generation fails if the user is already registered
+        (simulated by a soft-deleted verification token).
         """
         user_data = {
             "email": "test@testuser.com",
@@ -53,45 +61,64 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
 
 @pytest.mark.django_db
 class EmailVerifyLinkAPIViewTestCase(APITestCase):
-    url = reverse('core:verify-link')
+    """
+    Tests for the token-based email verification endpoint.
+    """
+
+    url = reverse("core:verify-link")
 
     def setUp(self):
+        """Set up initial verification data for testing."""
         self.email = "john@snow.com"
         self.verification = EmailVerification.objects.create(email=self.email)
 
     def test_email_verify_link(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test successful verification using a valid token.
         """
-        response = self.client.post(f"{self.url}?token={self.verification.verification_token}")
+        response = self.client.post(
+            f"{self.url}?token={self.verification.verification_token}"
+        )
         self.assertEqual(200, response.status_code)
 
     def test_no_token(self):
+        """Test that verification fails when no token is provided in the request."""
         response = self.client.post(self.url)
         self.assertEqual(400, response.status_code)
 
     def test_invalid_token(self):
+        """Test that verification fails when an incorrect UUID token is provided."""
         response = self.client.post(f"{self.url}?token={uuid.uuid4()}")
         self.assertEqual(401, response.status_code)
 
     def test_email_generation_for_registered_user(self):
+        """
+        Test verification behavior when the token is marked as deleted.
+        """
         self.verification.isDeleted = True
         self.verification.save(update_fields=["isDeleted"])
-        response = self.client.post(f"{self.url}?token={self.verification.verification_token}")
+        response = self.client.post(
+            f"{self.url}?token={self.verification.verification_token}"
+        )
         self.assertEqual(200, response.status_code)
 
 
 @pytest.mark.django_db
 class UserRegistrationAPIViewTestCase(APITestCase):
-    url = reverse('core:register')
+    """
+    Tests for the User Registration endpoint.
+    """
+
+    url = reverse("core:register")
 
     def setUp(self):
+        """Set up a valid verification token for registration tests."""
         self.email = "test@testuser.com"
         self.token = EmailVerification.objects.create(email=self.email)
 
     def test_register_without_verification_token(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test that registration fails if the verification token is missing.
         """
         user_data = {
             "email": self.email,
@@ -102,14 +129,14 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "designation": "M",
             "phone": "1234567890",
             "jiraID": "abcd",
-            "jira_access_token": "test_access_token"
+            "jira_access_token": "test_access_token",
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(400, response.status_code)
 
     def test_invalid_password(self):
         """
-        Test to verify that a post call with invalid passwords
+        Test that registration fails if password and confirm_password do not match.
         """
         user_data = {
             "email": self.email,
@@ -121,14 +148,14 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(400, response.status_code)
 
     def test_user_registration(self):
         """
-        Test to verify that a post call with user valid data
+        Test successful user registration with valid data and token.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -141,7 +168,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "jiraID": "abcd",
             "date_of_birth": "1999-12-12",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(201, response.status_code)
@@ -151,7 +178,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
 
     def test_user_registration_without_dob(self):
         """
-        Test to verify that a post call with user valid data
+        Test that registration succeeds even if date_of_birth is omitted.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -163,14 +190,14 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(201, response.status_code)
 
     def test_user_registration_without_jira(self):
         """
-        Test to verify that a post call with user valid data
+        Test that registration fails if the required jiraID field is missing.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -181,15 +208,15 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "designation": "M",
             "phone": "1234567890",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
-        self.assertTrue('This field is required.' in response.data['jiraID'])
+        self.assertTrue("This field is required." in response.data["jiraID"])
         self.assertEqual(400, response.status_code)
 
     def test_unique_email_validation(self):
         """
-        Test to verify that a post call with already exists email
+        Test that registering an email that already exists in the system fails.
         """
         user_data_1 = {
             "email": "test@testuser.com",
@@ -201,7 +228,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data_1)
         self.assertEqual(201, response.status_code)
@@ -216,14 +243,14 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data_2)
         self.assertEqual(401, response.status_code)
 
     def test_invalid_date_format(self):
         """
-        Test to verify that a post call with invalid date_of_birth
+        Test that registration fails if date_of_birth is in the wrong format.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -243,7 +270,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
 
     def test_invalid_phone_format(self):
         """
-        Test to verify that a post call with invalid date_of_birth
+        Test that registration fails if phone number does not meet validation rules.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -256,7 +283,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "jiraID": "abcd",
             "date_of_birth": "12-12-1222",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
         self.assertEqual(400, response.status_code)
@@ -264,10 +291,15 @@ class UserRegistrationAPIViewTestCase(APITestCase):
 
 @pytest.mark.django_db
 class UserLoginAPIViewTestCase(APITestCase):
+    """
+    Tests for the User Login endpoint.
+    """
+
     url = reverse("core:login")
     register = reverse("core:register")
 
     def setUp(self):
+        """Pre-register a user to test login functionality."""
         self.email = "test@testuser.com"
         self.password = "123123"
         token = EmailVerification.objects.create(email=self.email)
@@ -281,31 +313,44 @@ class UserLoginAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": token.verification_token
+            "token": token.verification_token,
         }
         self.client.post(self.register, user_data)
 
     def test_authentication_without_password(self):
+        """Test that login fails if the password field is missing."""
         response = self.client.post(self.url, {"email": self.email})
-        self.assertTrue('This field is required.' in response.data['password'])
+        self.assertTrue("This field is required." in response.data["password"])
         self.assertEqual(400, response.status_code)
 
     def test_refresh_in_cookie(self):
-        response = self.client.post(self.url, {"email": self.email, "password": self.password})
+        """Test that a successful login sets the refresh token in HttpOnly cookies."""
+        response = self.client.post(
+            self.url, {"email": self.email, "password": self.password}
+        )
         self.assertTrue("refresh" in response.cookies)
         self.assertFalse("refresh" in response.data)
         self.assertTrue("access" in response.data)
         self.assertEqual(200, response.status_code)
 
     def test_authentication_with_wrong_password(self):
-        response = self.client.post(self.url, {"email": self.email, "password": "I_know"})
+        """Test that login fails with an incorrect password."""
+        response = self.client.post(
+            self.url, {"email": self.email, "password": "I_know"}
+        )
         self.assertEqual(401, response.status_code)
 
     def test_authentication_with_wrong_credentials(self):
-        response = self.client.post(self.url, {"email": "abcd@g.com", "password": "I_know"})
+        """Test that login fails for a non-existent email address."""
+        response = self.client.post(
+            self.url, {"email": "abcd@g.com", "password": "I_know"}
+        )
         self.assertEqual(401, response.status_code)
 
     def test_authentication_with_valid_data(self):
-        response = self.client.post(self.url, {"email": self.email, "password": self.password})
+        """Test that login succeeds with correct credentials and returns an access token."""
+        response = self.client.post(
+            self.url, {"email": self.email, "password": self.password}
+        )
         self.assertTrue("access" in response.data)
         self.assertEqual(200, response.status_code)

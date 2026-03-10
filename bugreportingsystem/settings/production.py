@@ -1,4 +1,6 @@
-from .base import *
+import os
+
+from bugreportingsystem.settings.base import *
 
 DEBUG = False
 

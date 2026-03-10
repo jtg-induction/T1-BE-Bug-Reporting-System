@@ -1,59 +1,112 @@
-from django.db import models
-from django.conf import settings
 import uuid
-from core.constants import expiration_limit
-from django.utils import timezone
 from datetime import timedelta
 
+from django.conf import settings
+from django.db import models
+from django.utils import timezone
+
+from core.constants import invite_expiration_limit
+
+
 class SafeDeleteQuerySet(models.QuerySet):
-    
+    """
+    QuerySet that overrides the default delete behavior to perform a soft delete.
+    """
+
     def delete(self, using=None, keep_parents=False):
-        self.update(isDeleted=True)
-    
+        """
+        Updates the is_deleted flag to True instead of removing records.
+        """
+        self.update(is_deleted=True)
+
     def hard_delete(self, using=None, keep_parents=False):
+        """
+        Permanently removes records from the database.
+        """
         return super().delete(using=using, keep_parents=keep_parents)
-    
+
+
 class SoftDeleteManager(models.Manager.from_queryset(SafeDeleteQuerySet)):
-    
+    """
+    Manager that automatically filters out records marked as deleted.
+    """
+
     def get_queryset(self):
-        return super().get_queryset().filter(isDeleted=False)
+        """
+        Returns a queryset of objects where is_deleted is False.
+        """
+        return super().get_queryset().filter(is_deleted=False)
+
 
 class BaseModel(models.Model):
+    """
+    An abstract base model that provides auditing fields and soft-delete logic.
+
+    Attributes:
+        created_at (DateTimeField): Timestamp of record creation.
+        updated_at (DateTimeField): Timestamp of last update.
+        updated_by (ForeignKey): Reference to the user who last modified the record.
+        is_deleted (BooleanField): Flag to indicate if the record is soft-deleted.
+    """
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
-       settings.AUTH_USER_MODEL,
-       null=True,
-       blank=True,
-       on_delete=models.SET_NULL,
-       related_name="updated_%(class)s_set"
-   )
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_%(class)s_set",
+    )
     isDeleted = models.BooleanField(default=False)
-    
-    
+
     def delete(self, using=None, keep_parents=False):
-        self.isDeleted = True
-        self.save(update_fields=["isDeleted"], using=using)
-         
+        """
+        Marks the instance as deleted without removing it from the DB.
+        """
+        self.is_deleted = True
+        self.save(update_fields=["is_deleted"], using=using)
+
     def hard_delete(self, using=None, keep_parents=False):
+        """
+        Permanently removes the instance from the database.
+        """
         return super().delete(using=using, keep_parents=keep_parents)
 
-        
     objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
+        """
+        Metadata options for the BaseModel.
+        """
+
         abstract = True
-        
+
+
 class EmailVerification(BaseModel):
-    
+    """
+    Stores email verification tokens and their expiration logic.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
     email = models.EmailField()
     verification_token = models.UUIDField(default=uuid.uuid4)
     expires_at = models.DateTimeField()
-    
+
     class Meta:
-      verbose_name = 'Email Verification'
-      
+        """
+        Metadata options for the EmailVerification model.
+        """
+
+        verbose_name = "Email Verification"
+
     def save(self, *args, **kwargs):
-        self.expires_at = timezone.now() + timedelta(seconds=expiration_limit)
+        """
+        Overrides save to automatically set the expiration timestamp.
+        """
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timedelta(
+                seconds=invite_expiration_limit
+            )
         return super().save(*args, **kwargs)

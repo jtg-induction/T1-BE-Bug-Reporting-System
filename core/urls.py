@@ -1,12 +1,23 @@
 from django.urls import path
-from core.views import UserRegistrationAPIView, EmailVerifyTokenGenerateAPIView, CustomTokenObtainPairView, CustomTokenRefreshView, CustomTokenBlacklistView
 
-app_name = 'core'
+from core.views import (
+    CustomTokenBlacklistView,
+    CustomTokenObtainPairView,
+    CustomTokenRefreshView,
+    EmailVerifyTokenGenerateAPIView,
+    UserRegistrationAPIView,
+)
+
+app_name = "core"
 
 urlpatterns = [
     path("register/", UserRegistrationAPIView.as_view(), name="register"),
-    path("generate-email-link/", EmailVerifyTokenGenerateAPIView.as_view(), name="generate-email-link"),
-    path('refresh/', CustomTokenRefreshView.as_view(), name="token_refresh"),
-    path('login/', CustomTokenObtainPairView.as_view(), name="login"),
-    path('logout/', CustomTokenBlacklistView.as_view(), name="logout")
+    path(
+        "generate-email-link/",
+        EmailVerifyTokenGenerateAPIView.as_view(),
+        name="generate-email-link",
+    ),
+    path("refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
+    path("login/", CustomTokenObtainPairView.as_view(), name="login"),
+    path("logout/", CustomTokenBlacklistView.as_view(), name="logout"),
 ]

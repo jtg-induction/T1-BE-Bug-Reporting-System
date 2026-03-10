@@ -1,16 +1,41 @@
-from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from rest_framework import serializers
 
 User = get_user_model()
 
+
 class UserSerializer(serializers.ModelSerializer):
+    """
+    Serializer for viewing and updating user profile information.
+
+    Restricts updates to sensitive identity fields like email and jiraID
+    while allowing modifications to personal details.
+    """
 
     class Meta:
+        """
+        Metadata options for UserSerializer.
+        """
+
         model = User
-        fields = ["first_name", "last_name", "email", "date_of_birth", "designation", "phone", "jiraID"]
+        fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "date_of_birth",
+            "designation",
+            "phone",
+            "jiraID",
+        ]
         read_only_fields = ["email", "jiraID"]
-        
+
     def validate(self, data):
+        """
+        Perform cross-field validation and enforce strict read-only constraints.
+
+        Explicitly checks initial_data to ensure that read_only_fields
+        are not included in the update request.
+        """
         if self.instance:
             errors = {}
             for field_name in self.Meta.read_only_fields:
@@ -18,5 +43,5 @@ class UserSerializer(serializers.ModelSerializer):
                     errors[field_name] = "This field cannot be updated."
             if errors:
                 raise serializers.ValidationError(errors)
-    
+
         return data
