@@ -15,9 +15,9 @@ class SafeDeleteQuerySet(models.QuerySet):
 
     def delete(self, using=None, keep_parents=False):
         """
-        Updates the is_deleted flag to True instead of removing records.
+        Updates the isDeleted flag to True instead of removing records.
         """
-        self.update(is_deleted=True)
+        self.update(isDeleted=True)
 
     def hard_delete(self, using=None, keep_parents=False):
         """
@@ -33,9 +33,9 @@ class SoftDeleteManager(models.Manager.from_queryset(SafeDeleteQuerySet)):
 
     def get_queryset(self):
         """
-        Returns a queryset of objects where is_deleted is False.
+        Returns a queryset of objects where isDeleted is False.
         """
-        return super().get_queryset().filter(is_deleted=False)
+        return super().get_queryset().filter(isDeleted=False)
 
 
 class BaseModel(models.Model):
@@ -46,7 +46,7 @@ class BaseModel(models.Model):
         created_at (DateTimeField): Timestamp of record creation.
         updated_at (DateTimeField): Timestamp of last update.
         updated_by (ForeignKey): Reference to the user who last modified the record.
-        is_deleted (BooleanField): Flag to indicate if the record is soft-deleted.
+        isDeleted (BooleanField): Flag to indicate if the record is soft-deleted.
     """
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -64,8 +64,8 @@ class BaseModel(models.Model):
         """
         Marks the instance as deleted without removing it from the DB.
         """
-        self.is_deleted = True
-        self.save(update_fields=["is_deleted"], using=using)
+        self.isDeleted = True
+        self.save(update_fields=["isDeleted"], using=using)
 
     def hard_delete(self, using=None, keep_parents=False):
         """
