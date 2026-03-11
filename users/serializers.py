@@ -5,14 +5,8 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """
-    Serializer for viewing and updating user profile information.
-
-    Restricts updates to sensitive identity fields like email and jiraID
-    while allowing modifications to personal details.
-    """
-
     is_owner = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
 
     class Meta:
         """
@@ -49,7 +43,7 @@ class UserSerializer(serializers.ModelSerializer):
 
         return data
 
-    def get_is_owner(self, obj):
+    def get_can_edit(self, obj):
         user = self.context["user"]
         if obj.id == user.id:
             return True

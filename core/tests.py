@@ -1,5 +1,3 @@
-import uuid
-
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -16,9 +14,9 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
     Tests for the email verification link generation endpoint.
     """
 
-    url = reverse('core:generate-email-link')
-    register = reverse('core:register')
-    
+    url = reverse("core:generate-email-link")
+    register = reverse("core:register")
+
     def setUp(self):
         self.email = "test@testuser.com"
         self.token = EmailVerification.objects.create(email=self.email)
@@ -63,9 +61,9 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
             "phone": "1234567890",
             "jiraID": "abcd",
             "jira_access_token": "test_access_token",
-            "token": self.token.verification_token
+            "token": self.token.verification_token,
         }
-        
+
         self.client.post(self.register, user_data)
         response = self.client.post(self.url, {"email": self.email})
         self.assertTrue("You are already registered" in response.data["detail"])

@@ -23,7 +23,9 @@ class UserAPIView(viewsets.ViewSet):
         if str(request.user.id) != pk:
             raise PermissionDenied("You can only update your own profile.")
         data = {"user": request.user}
-        serializer = UserSerializer(request.user, data=request.data, partial=True, context=data)
+        serializer = UserSerializer(
+            request.user, data=request.data, partial=True, context=data
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save(updated_by=request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)

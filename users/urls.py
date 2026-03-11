@@ -14,4 +14,7 @@ router.register('', UserAPIView, basename='user')
 urlpatterns = [
     path("", include(router.urls)),
 ]
+<<<<<<< HEAD
 >>>>>>> 036397d (FS_02: Test cases fixes)
+=======
+>>>>>>> b32ad7a (FS_02: PR Fixes)

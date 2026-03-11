@@ -7,58 +7,6 @@ User = get_user_model()
 
 
 @pytest.mark.django_db
-<<<<<<< HEAD
-class UserMeAPIViewTestCase(APITestCase):
-    url = reverse("users:me")
-    login = reverse("core:login")
-
-    def setUp(self):
-
-        self.user = User.objects.create_user(
-            first_name="test",
-            last_name="user",
-            email="test@testuser.com",
-            password="tester",
-            designation="M",
-            jiraID="abcd",
-            jira_access_token="test_access_token",
-        )
-        self.user2 = User.objects.create_user(
-            first_name="test2",
-            last_name="user2",
-            email="test2@testuser.com",
-            password="tester2",
-            designation="M",
-            jiraID="abcde",
-            jira_access_token="test_access_token2",
-        )
-
-        response = self.client.post(
-            self.login, {"email": "test@testuser.com", "password": "tester"}
-        )
-        self.access1 = response.data["access"]
-        self.refresh1 = response.cookies["refresh"]
-        self.client.cookies["refresh"] = self.refresh1
-        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + self.access1)
-
-    def test_access_with_invalid_token(self):
-        self.client.credentials(HTTP_AUTHORIZATION="Bearer a-fake-access-token")
-        response = self.client.get(self.url)
-        self.assertEqual(401, response.status_code)
-
-    def test_access_with_valid_token(self):
-        response = self.client.get(self.url)
-        data = response.data
-        self.assertEqual(self.user.first_name, data["first_name"])
-        self.assertEqual(self.user.last_name, data["last_name"])
-        self.assertEqual(self.user.email, data["email"])
-        self.assertEqual(str(self.user.id), data["id"])
-        self.assertEqual(200, response.status_code)
-
-
-@pytest.mark.django_db
-=======
->>>>>>> 036397d (FS_02: Test cases fixes)
 class UserProfileAPIViewTestCase(APITestCase):
     login = reverse("core:login")
 
