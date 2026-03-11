@@ -1,14 +1,12 @@
-import requests
 from django.db import transaction
 from rest_framework import viewsets, mixins, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from requests.auth import HTTPBasicAuth
 
-from .models import Project, ProjectMember
-from .serializers import ProjectSerializer
-
+from projects.models import Project, ProjectMember
+from projects.serializers import ProjectSerializer
+from core.utils import JiraClient, JiraClientException 
 
 class ProjectViewSet(mixins.CreateModelMixin,
                      mixins.ListModelMixin,
@@ -27,9 +25,11 @@ class ProjectViewSet(mixins.CreateModelMixin,
 
     @action(detail=False, methods=['get'], url_path='archived')
     def archived_projects(self, request):
-        archived_qs = Project.objects.filter(status=Project.Status.ARCHIVED, 
-                                            project_members__member=request.user,
-                                            project_members__status=ProjectMember.Status.ACTIVE)
+        archived_qs = Project.objects.filter(
+            status=Project.Status.ARCHIVED, 
+            project_members__member=request.user,
+            project_members__status=ProjectMember.Status.ACTIVE
+        ).distinct()
         serializer = self.get_serializer(archived_qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -40,35 +40,18 @@ class ProjectViewSet(mixins.CreateModelMixin,
         key = serializer.validated_data.get('key')
         title = serializer.validated_data.get('title')
         description = serializer.validated_data.get('description')
-        access_token = request.user.jira_access_token
         raw_url = serializer.validated_data.get('jira_url')
+        access_token = request.user.jira_access_token
 
-        if not raw_url.startswith('http'):
-            base_url = f"https://{raw_url}"
-        else:
-            base_url = raw_url
-        base_url = base_url.rstrip('/')
-
-        jira_api_endpoint = f"{base_url}/rest/api/3/project"
-
-        jira_payload = {
-            "key": key,
-            "name": title,
-            "description": description,
-            "projectTypeKey": "software",
-            "leadAccountId": request.user.jiraID
-        }
-
-        auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        }
+        try:
+            jira_client = JiraClient(raw_url, request.user.email, access_token)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             with transaction.atomic():
                 project = serializer.save(
-                    jira_url=base_url,
+                    jira_url=jira_client.base_url,
                     owner=request.user,
                     jira_project_id="" 
                 )
@@ -81,33 +64,24 @@ class ProjectViewSet(mixins.CreateModelMixin,
                     status=ProjectMember.Status.ACTIVE
                 )
 
-                response = requests.post(
-                    jira_api_endpoint, 
-                    json=jira_payload, 
-                    headers=headers, 
-                    auth=auth 
+                jira_response = jira_client.create_project(
+                    key=key,
+                    name=title,
+                    description=description,
+                    lead_account_id=request.user.jiraID
                 )
-                response_data = response.json()
 
-                if response.status_code == 201:
-                    project.jira_project_id = response_data.get("id")
-                    project.save(update_fields=['jira_project_id'])
-                    response_serializer = ProjectSerializer(project, context={'request': request})
-                    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+                project.jira_project_id = jira_response.get("id")
+                project.save(update_fields=['jira_project_id'])
                 
-                else:
-                    error_msg = response_data.get("errorMessages", ["Unknown Jira Error"])[0]
-                    raise ValueError(f"Jira rejected the project: {error_msg}")
+                response_serializer = ProjectSerializer(project, context={'request': request})
+                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-        except ValueError as e:
+        except JiraClientException as e:
+            status_code = status.HTTP_400_BAD_REQUEST if e.status_code else status.HTTP_503_SERVICE_UNAVAILABLE
             return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except requests.exceptions.RequestException as e:
-            return Response(
-                {"error": "Network error while contacting Jira. Project creation cancelled.", "details": str(e)},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
+                {"error": str(e), "jira_details": e.response_data},
+                status=status_code
             )
         except Exception as e:
             return Response(

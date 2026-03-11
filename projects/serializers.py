@@ -14,6 +14,8 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def get_project_role(self, obj):
         request = self.context.get('request')
+        if not request or not request.user:
+            return None
         member = obj.project_members.filter(member=request.user).first()
         return member.role if member else None
 

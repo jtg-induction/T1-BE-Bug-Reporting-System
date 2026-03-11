@@ -1,9 +1,18 @@
 import logging
+import os
 import smtplib
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
+import requests
 from django.conf import settings
 from django.core.mail import EmailMessage
+from dotenv import load_dotenv
+from requests.auth import HTTPBasicAuth
+
+load_dotenv()
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
+if not FRONTEND_BASE_URL:
+    raise ValueError("FRONTEND_BASE_URL environment variable is not set")
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +69,61 @@ def send_verification_email(email, token):
         email_message.send()
     except smtplib.SMTPException as e:
         logger.error(f"Email sending failed: {e}")
+
+
+class JiraClientException(Exception):
+    def __init__(self, message, status_code=None, response_data=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_data = response_data
+
+
+class JiraClient:
+    def __init__(self, raw_url, email, access_token):
+        if not raw_url.startswith("http"):
+            raw_url = f"https://{raw_url}"
+
+        parsed = urlparse(raw_url)
+        if not parsed.netloc:
+            raise ValueError("Invalid Jira URL format.")
+
+        self.base_url = f"{parsed.scheme}://{parsed.netloc}"
+        self.auth = HTTPBasicAuth(email, access_token)
+        self.headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    def _request(self, method, endpoint, **kwargs):
+        url = f"{self.base_url}{endpoint}"
+        try:
+            response = requests.request(method, url, headers=self.headers, auth=self.auth, timeout=30, **kwargs)
+
+            try:
+                response_data = response.json() if response.text else {}
+            except ValueError:
+                raise JiraClientException(
+                    f"Jira returned invalid JSON: {response.text[:200]}", status_code=response.status_code
+                )
+
+            if not (200 <= response.status_code < 300):
+                error_msg = (
+                    response_data.get("errorMessages", ["Unknown Jira Error"])[0]
+                    if isinstance(response_data, dict)
+                    else "Unknown Jira Error"
+                )
+                raise JiraClientException(
+                    f"Jira API Error: {error_msg}", status_code=response.status_code, response_data=response_data
+                )
+
+            return response_data
+
+        except requests.exceptions.RequestException as e:
+            raise JiraClientException(f"Network error while contacting Jira: {str(e)}")
+
+    def create_project(self, key, name, description, lead_account_id):
+        payload = {
+            "key": key,
+            "name": name,
+            "description": description,
+            "projectTypeKey": "software",
+            "leadAccountId": lead_account_id,
+        }
+        return self._request("POST", "/rest/api/3/project", json=payload)

@@ -11,11 +11,11 @@ User = get_user_model()
 
 @pytest.mark.django_db
 class ProjectViewSetTestCase(APITestCase):
-    login = reverse("core:login")
-    list_url = reverse("project-list")
-    archived_url = reverse("project-archived-projects")
-
+    
     def setUp(self):
+        self.login = reverse("core:login")
+        self.list_url = reverse("project-list")
+        self.archived_url = reverse("project-archived-projects")
         self.user = User.objects.create_user(
             first_name="test",
             last_name="user",
@@ -109,7 +109,7 @@ class ProjectViewSetTestCase(APITestCase):
         response = self.client.post(self.list_url, data)
         self.assertEqual(400, response.status_code)
 
-    @patch('requests.post')
+    @patch('core.utils.requests.request')
     def test_create_project_success(self, mock_post):
         mock_post.return_value.status_code = 201
         mock_post.return_value.json.return_value = {"id": "10002"}
@@ -125,7 +125,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(201, response.status_code)
         self.assertEqual(response.data["jira_project_id"], "10002")
         self.assertEqual(response.data["title"], "New Project")
-        
+
         project_exists = Project.objects.filter(key="NEW").exists()
         self.assertTrue(project_exists)
         
@@ -154,7 +154,7 @@ class ProjectViewSetTestCase(APITestCase):
         project_exists = Project.objects.filter(key="FAIL").exists()
         self.assertFalse(project_exists)
 
-    @patch('requests.post')
+    @patch('core.utils.requests.request')
     def test_create_project_network_error(self, mock_post):
         mock_post.side_effect = RequestException("Connection timeout")
 

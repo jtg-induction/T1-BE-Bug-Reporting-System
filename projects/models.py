@@ -35,7 +35,7 @@ class ProjectMember(BaseModel):
 
     class Role(models.IntegerChoices):
         DEV = 0, ('Developer')
-        ADMIN = 1, ('ADMIN')
+        ADMIN = 1, ('Admin')
 
     class Status(models.IntegerChoices):
         INVITED = 0, ('Invited')
