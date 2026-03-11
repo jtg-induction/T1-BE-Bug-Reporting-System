@@ -2,6 +2,7 @@ import os
 from urllib.parse import unquote
 from uuid import uuid4
 
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from dotenv import load_dotenv
 from rest_framework import status
@@ -22,7 +23,7 @@ from core.serializers import UserEmailVerifySerializer, UserRegisterSerializer
 from core.utils import send_verification_email
 
 load_dotenv()
-from django.contrib.auth import get_user_model
+
 
 User = get_user_model()
 
@@ -121,44 +122,23 @@ class UserRegistrationAPIView(CreateAPIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-<<<<<<< HEAD
-        """
-        Validates the verification token and email before creating a new user instance.
-        """
-        verify_token = unquote(request.data.get("token"))
-        email = unquote(request.data.get("email"))
+        verify_token = request.data.get("token")
+        email = request.data.get("email")
 
         if not verify_token:
-            return ParseError("Token not provided", status=status.HTTP_400_BAD_REQUEST)
+            raise ParseError("Token not provided")
 
         if not email:
-            return ParseError("Email not provided", status=status.HTTP_400_BAD_REQUEST)
+            raise ParseError("Email not provided")
+
+        verify_token = unquote(verify_token)
+        email = unquote(email)
 
         emailVerified = EmailVerification.objects.filter(
-            verification_token=verify_token,
-            email=email,
-            expires_at__gte=timezone.now(),
-            isDeleted=False,
+            verification_token=verify_token, email=email, expires_at__gte=timezone.now()
         ).first()
 
         if emailVerified:
-=======
-        verify_token = request.data.get("token")
-        email = request.data.get("email")
-        
-        if not verify_token:
-            raise ParseError("Token not provided")
-        
-        if not email:
-            raise ParseError("Email not provided")
-        
-        verify_token = unquote(verify_token)
-        email = unquote(email)
-        
-        emailVerified = EmailVerification.objects.filter(verification_token=verify_token, email=email, expires_at__gte=timezone.now()).first()
-        
-        if (emailVerified):
->>>>>>> 036397d (FS_02: Test cases fixes)
             request.data.pop("token")
             request.data["email"] = email
             serializer = self.get_serializer(data=request.data)
@@ -177,25 +157,12 @@ class UserRegistrationAPIView(CreateAPIView):
                 samesite="Strict",
                 path="/api/",
             )
-<<<<<<< HEAD
 
-            EmailVerification.objects.filter(email=email).delete()
-
-            return response
-
-        return NotAuthenticated(
-            "Invalid Token or Token Expired", status=status.HTTP_401_UNAUTHORIZED
-        )
-
-
-=======
-            
             return response
 
         raise NotAuthenticated("Token Expired")
-        
-    
->>>>>>> 036397d (FS_02: Test cases fixes)
+
+
 class EmailVerifyTokenGenerateAPIView(APIView):
     """
     API view to generate or regenerate an email verification link.
@@ -209,33 +176,19 @@ class EmailVerifyTokenGenerateAPIView(APIView):
         Checks for existing valid tokens or creates a new one to send via email.
         """
         email = request.data.get("email")
-        
+
         if User.objects.filter(email=email).exists():
             raise ParseError("You are already registered")
-        
+
         verify_token = EmailVerification.objects.filter(email=email).first()
-<<<<<<< HEAD
 
         if verify_token:
-            if verify_token.isDeleted:
-                return ParseError(
-                    "You are already registered", status=status.HTTP_400_BAD_REQUEST
-                )
-
             if verify_token.expires_at > timezone.now():
                 return Response(
                     {"detail": "Mail already sent to your email"},
                     status=status.HTTP_200_OK,
                 )
 
-=======
-        
-        if verify_token:
-
-            if (verify_token.expires_at > timezone.now()):
-                return Response({"detail": "Mail already sent to your email"}, status=status.HTTP_200_OK)
-            
->>>>>>> 036397d (FS_02: Test cases fixes)
             else:
                 verify_token.verification_token = uuid4()
                 verify_token.save(update_fields=["verification_token"])
