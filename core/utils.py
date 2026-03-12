@@ -1,15 +1,9 @@
 import logging
-import os
 import smtplib
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.core.mail import EmailMessage
-from dotenv import load_dotenv
-
-load_dotenv()
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
-if not FRONTEND_BASE_URL:
-    raise ValueError("FRONTEND_BASE_URL environment variable is not set")
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +20,7 @@ def send_verification_email(email, token):
         smtplib.SMTPException: Logged if the mail server fails to deliver the message.
     """
     params = urlencode({"token": token, "email": email})
-    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?{params}"
+    verification_url = f"{settings.FRONTEND_BASE_URL}/signup/complete?{params}"
     subject = "Let's get you started!"
 
     html_content = f"""

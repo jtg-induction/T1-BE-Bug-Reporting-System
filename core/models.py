@@ -65,7 +65,7 @@ class BaseModel(models.Model):
         Marks the instance as deleted without removing it from the DB.
         """
         self.isDeleted = True
-        self.save(update_fields=["isDeleted"], using=using)
+        self.save(update_fields=["isDeleted", "updated_at"], using=using)
 
     def hard_delete(self, using=None, keep_parents=False):
         """
@@ -89,9 +89,9 @@ class EmailVerification(BaseModel):
     Stores email verification tokens and their expiration logic.
     """
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    email = models.EmailField()
-    verification_token = models.UUIDField(default=uuid.uuid4)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField(unique=True)
+    verification_token = models.UUIDField(default=uuid.uuid4, editable=False)
     expires_at = models.DateTimeField()
 
     class Meta:

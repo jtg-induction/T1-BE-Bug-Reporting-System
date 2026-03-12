@@ -40,22 +40,6 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
-    def validate_email(self, value):
-        """
-        Check if the provided email is already registered.
-        """
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Email already registered")
-        return value
-
-    def validate_jiraID(self, value):
-        """
-        Check if the provided jiraID is already in use by another user.
-        """
-        if User.objects.filter(jiraID=value).exists():
-            raise serializers.ValidationError("JiraID already in Use")
-        return value
-
     def validate(self, value):
         """
         Perform cross-field validation to ensure passwords match.
@@ -97,20 +81,3 @@ class UserEmailVerifySerializer(serializers.ModelSerializer):
         model = EmailVerification
         fields = ["id", "email", "verification_token", "expires_at"]
         read_only_fields = ["id", "expires_at"]
-
-    def validate_email(self, value):
-        """
-        Ensure the email is not already associated with an existing user.
-        """
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Email already registered")
-        return value
-
-    def create(self, validated_data):
-        """
-        Create and return a new EmailVerification record.
-        """
-        verification = EmailVerification.objects.create(
-            email=validated_data["email"],
-        )
-        return verification
