@@ -45,6 +45,7 @@ MIDDLEWARE = [
 ]
 
 raw_origins = os.getenv("CORS_ALLOWED_ORIGINS")
+
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_origins.split(",") if origin]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -87,6 +88,11 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
+    "DEFAULT_RENDERER_CLASSES": [
+        'core.renderers.GlobalJSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+    "DEFAULT_PAGINATION_CLASS": 'core.pagination.StandardResultsSetPagination',
 }
 
 SIMPLE_JWT = {

@@ -5,7 +5,6 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
-    is_owner = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
 
     class Meta:
@@ -22,7 +21,7 @@ class UserSerializer(serializers.ModelSerializer):
             "phone",
             "date_of_birth",
             "designation",
-            "is_owner",
+            "can_edit",
         ]
         read_only_fields = ["email"]
 
