@@ -9,7 +9,9 @@ from users.serializers import CurrentUserSerializer, UserSerializer
 User = get_user_model()
 
 
-class UserAPIViewSet(mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+class UserAPIViewSet(
+    mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet
+):
     """
     ViewSet for managing user profiles.
     Provides endpoints to retrieve user details and allows users to update their own profile.

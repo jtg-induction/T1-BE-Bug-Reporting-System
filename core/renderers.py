@@ -1,10 +1,11 @@
 from rest_framework.renderers import JSONRenderer
 
+
 class GlobalJSONRenderer(JSONRenderer):
     """
     Custom Renderer to standardize all API responses into a unified JSON structure.
 
-    This renderer intercepts the response data and wraps it in a consistent 
+    This renderer intercepts the response data and wraps it in a consistent
     'envelope' containing success status, messages, and error details.
 
     Response Structure:
@@ -29,17 +30,17 @@ class GlobalJSONRenderer(JSONRenderer):
         Returns:
             A JSON-rendered string of the standardized response dictionary.
         """
-        if isinstance(data, dict) and 'success' in data and 'metadata' in data:
+        if isinstance(data, dict) and "success" in data and "metadata" in data:
             return super().render(data, accepted_media_type, renderer_context)
 
-        response = renderer_context.get('response')
+        response = renderer_context.get("response")
         status_code = response.status_code if response else 200
-        
+
         response_dict = {
             "success": True if status_code < 400 else False,
             "message": "Success" if status_code < 400 else "Error",
             "data": data,
-            "errors": None
+            "errors": None,
         }
 
         if status_code >= 400:
