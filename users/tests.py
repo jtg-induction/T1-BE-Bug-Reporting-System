@@ -42,7 +42,9 @@ class UserProfileAPIViewTestCase(APITestCase):
         )
 
         self.url = reverse("users:user-detail", kwargs={"pk": self.user.pk})
-        response = self.client.post(self.login, {"email": "test@testuser.com", "password": "tester"})
+        response = self.client.post(
+            self.login, {"email": "test@testuser.com", "password": "tester"}
+        )
         self.access = response.data["access"]
         self.refresh = response.cookies["refresh"]
         self.client.cookies["refresh"] = self.refresh
@@ -50,7 +52,7 @@ class UserProfileAPIViewTestCase(APITestCase):
 
     def test_access_with_invalid_token(self):
         """
-        Verifies that requests with an invalid access token are rejected with a 401 Unauthorized status.
+        Verify that requests with an invalid access token are rejected with a 401 status.
         """
         self.client.credentials(HTTP_AUTHORIZATION="Bearer a-fake-access-token")
         response = self.client.get(self.url)
@@ -90,7 +92,9 @@ class UserProfileAPIViewTestCase(APITestCase):
         """
         Verifies that a user can view another user's profile but does not receive edit permissions.
         """
-        response = self.client.post(self.login, {"email": "test2@testuser.com", "password": "tester2"})
+        response = self.client.post(
+            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+        )
         access = response.data["access"]
         refresh = response.cookies["refresh"]
         self.client.cookies["refresh"] = refresh
@@ -112,7 +116,9 @@ class UserProfileAPIViewTestCase(APITestCase):
         Ensures that a user is forbidden (403) from updating another user's profile
         and that no changes are actually made to the target profile.
         """
-        response = self.client.post(self.login, {"email": "test2@testuser.com", "password": "tester2"})
+        response = self.client.post(
+            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+        )
         access = response.data["access"]
         refresh = response.cookies["refresh"]
         self.client.cookies["refresh"] = refresh

@@ -22,7 +22,7 @@ AUTH_USER_MODEL = "users.CustomUser"
 THIRD_PARTY_APPS = [
     "corsheaders",
     "rest_framework",
-    'rest_framework_simplejwt.token_blacklist'
+    "rest_framework_simplejwt.token_blacklist",
 ]
 
 LOCAL_APPS = [
@@ -89,10 +89,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
     "DEFAULT_RENDERER_CLASSES": [
-        'core.renderers.GlobalJSONRenderer',
-        'rest_framework.renderers.BrowsableAPIRenderer',
+        "core.renderers.GlobalJSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
     ],
-    "DEFAULT_PAGINATION_CLASS": 'core.pagination.StandardResultsSetPagination',
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardResultsSetPagination",
 }
 
 SIMPLE_JWT = {

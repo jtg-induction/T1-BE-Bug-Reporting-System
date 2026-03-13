@@ -157,6 +157,7 @@ class UserRegistrationAPIView(CreateAPIView):
                 samesite="Strict",
                 path="/api/",
             )
+            EmailVerification.objects.filter(email=email).delete()
 
             return response
 
