@@ -1,31 +1,50 @@
 from django.contrib.auth import get_user_model
-from django.shortcuts import get_object_or_404
-from rest_framework import status, viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from users.serializers import UserSerializer
+from users.serializers import CurrentUserSerializer, UserSerializer
 
 User = get_user_model()
 
 
-class UserAPIView(viewsets.ViewSet):
+class UserAPIViewSet(mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for managing user profiles.
+    Provides endpoints to retrieve user details and allows users to update their own profile.
+    """
+
+    queryset = User.objects.all()
     permission_classes = [IsAuthenticated]
 
-    def retrieve(self, request, pk=None):
-        target_user = get_object_or_404(User, pk=pk)
-        data = {"user": request.user}
-        serializer = UserSerializer(target_user, context=data)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    def get_serializer_class(self):
+        """
+        Determines the appropriate serializer based on the current action.
+        Uses CurrentUserSerializer for updates and the current user endpoint, otherwise defaults to UserSerializer.
+        """
+        if self.action in ["update", "partial_update", "current_user"]:
+            return CurrentUserSerializer
+        return UserSerializer
 
-    def update(self, request, pk=None):
-        if str(request.user.id) != pk:
+    def check_object_permissions(self, request, obj):
+        """
+        Checks object-level permissions before executing an action.
+        Ensures that users can only modify their own profile information.
+        """
+        super().check_object_permissions(request, obj)
+        if self.action in ["update", "partial_update"] and obj != request.user:
             raise PermissionDenied("You can only update your own profile.")
-        data = {"user": request.user}
-        serializer = UserSerializer(
-            request.user, data=request.data, partial=True, context=data
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save(updated_by=request.user)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def perform_update(self, serializer):
+        """
+        Saves the updated user object and records the user who made the modification.
+        """
+        serializer.save(updated_by=self.request.user)
+
+    def current_user(self, request, *args, **kwargs):
+        """
+        Retrieves the profile information of the currently authenticated user.
+        """
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)

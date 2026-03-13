@@ -5,6 +5,11 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """
+    Serializer for handling User model instances.
+    Provides basic user details and a dynamic flag indicating if the request user can edit this profile.
+    """
+
     can_edit = serializers.SerializerMethodField()
 
     class Meta:
@@ -43,7 +48,22 @@ class UserSerializer(serializers.ModelSerializer):
         return data
 
     def get_can_edit(self, obj):
-        user = self.context["user"]
-        if obj.id == user.id:
-            return True
+        """
+        Evaluates whether the currently authenticated user making the request
+        has permission to edit this specific user instance.
+        """
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            return obj.id == request.user.id
+
         return False
+
+
+class CurrentUserSerializer(UserSerializer):
+    """
+    Serializer for the current logged-in user.
+    Includes Jira credentials and tokens.
+    """
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ["jiraID", "jira_access_token"]
