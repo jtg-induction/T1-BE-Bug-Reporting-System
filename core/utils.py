@@ -72,6 +72,11 @@ def send_verification_email(email, token):
 
 
 class JiraClientException(Exception):
+    """
+    Custom exception for errors encountered during Jira API interactions.
+    Captures the error message, HTTP status code, and raw response data for easier debugging.
+    """
+
     def __init__(self, message, status_code=None, response_data=None):
         super().__init__(message)
         self.status_code = status_code
@@ -79,6 +84,11 @@ class JiraClientException(Exception):
 
 
 class JiraClient:
+    """
+    Utility client for communicating with the Jira REST API.
+    Handles URL formatting, basic authentication, and standardized request execution.
+    """
+
     def __init__(self, raw_url, email, access_token):
         if not raw_url.startswith("http"):
             raw_url = f"https://{raw_url}"
@@ -92,7 +102,12 @@ class JiraClient:
         self.headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     def _request(self, method, endpoint, **kwargs):
+        """
+        Internal helper to execute HTTP requests against the Jira API.
+        Automatically handles timeouts, JSON parsing, and standardizes error formatting.
+        """
         url = f"{self.base_url}{endpoint}"
+        response_data = None
         try:
             response = requests.request(method, url, headers=self.headers, auth=self.auth, timeout=30, **kwargs)
 
@@ -119,6 +134,9 @@ class JiraClient:
             raise JiraClientException(f"Network error while contacting Jira: {str(e)}")
 
     def create_project(self, key, name, description, lead_account_id):
+        """
+        Creates a new software project in Jira using the provided configuration.
+        """
         payload = {
             "key": key,
             "name": name,
