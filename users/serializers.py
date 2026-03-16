@@ -53,7 +53,7 @@ class UserSerializer(serializers.ModelSerializer):
         has permission to edit this specific user instance.
         """
         request = self.context.get("request")
-        if request and hasattr(request, "user"):
+        if request:
             return obj.id == request.user.id
 
         return False
@@ -67,3 +67,4 @@ class CurrentUserSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + ["jiraID", "jira_access_token"]
+        extra_kwargs = {"jira_access_token": {"write_only": True}}

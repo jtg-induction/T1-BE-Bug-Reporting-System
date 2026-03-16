@@ -30,21 +30,26 @@ class GlobalJSONRenderer(JSONRenderer):
         Returns:
             A JSON-rendered string of the standardized response dictionary.
         """
-        if isinstance(data, dict) and "success" in data and "metadata" in data:
+        if isinstance(data, dict) and "success" in data:
             return super().render(data, accepted_media_type, renderer_context)
 
-        response = renderer_context.get("response")
+        response = renderer_context.get("response") if renderer_context else None
         status_code = response.status_code if response else 200
 
-        response_dict = {
-            "success": True if status_code < 400 else False,
-            "message": "Success" if status_code < 400 else "Error",
-            "data": data,
-            "errors": None,
-        }
+        custom_message = None
+        if isinstance(data, dict):
+            custom_message = data.pop("message", None)
 
-        if status_code >= 400:
-            response_dict["errors"] = data
-            response_dict["data"] = None
+            if not custom_message and status_code >= 400:
+                custom_message = data.pop("detail", None)
+
+        is_success = status_code < 400
+
+        response_dict = {
+            "success": is_success,
+            "message": custom_message or ("Success" if is_success else "Error"),
+            "data": data if is_success else None,
+            "errors": None if is_success else data,
+        }
 
         return super().render(response_dict, accepted_media_type, renderer_context)

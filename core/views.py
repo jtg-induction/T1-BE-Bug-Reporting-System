@@ -1,12 +1,11 @@
 import os
-from urllib.parse import unquote
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from dotenv import load_dotenv
 from rest_framework import status
-from rest_framework.exceptions import NotAuthenticated, ParseError
+from rest_framework.exceptions import ParseError
 from rest_framework.generics import CreateAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -121,47 +120,28 @@ class UserRegistrationAPIView(CreateAPIView):
     serializer_class = UserRegisterSerializer
     permission_classes = [AllowAny]
 
-    def post(self, request):
-        verify_token = request.data.get("token")
-        email = request.data.get("email")
+    def post(self, request, *args, **kwargs):
 
-        if not verify_token:
-            raise ParseError("Token not provided")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
 
-        if not email:
-            raise ParseError("Email not provided")
+        response = Response(
+            {"access": str(refresh.access_token)}, status=status.HTTP_201_CREATED
+        )
+        response.set_cookie(
+            key="refresh",
+            value=str(refresh),
+            httponly=True,
+            secure=SECURE,
+            samesite="Strict",
+            path="/api/",
+        )
 
-        verify_token = unquote(verify_token)
-        email = unquote(email)
+        EmailVerification.objects.filter(email=user.email).delete()
 
-        emailVerified = EmailVerification.objects.filter(
-            verification_token=verify_token, email=email, expires_at__gte=timezone.now()
-        ).first()
-
-        if emailVerified:
-            request.data.pop("token")
-            request.data["email"] = email
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            user = serializer.save()
-            refresh = RefreshToken.for_user(user)
-
-            response = Response(
-                {"access": str(refresh.access_token)}, status=status.HTTP_201_CREATED
-            )
-            response.set_cookie(
-                key="refresh",
-                value=str(refresh),
-                httponly=True,
-                secure=SECURE,
-                samesite="Strict",
-                path="/api/",
-            )
-            EmailVerification.objects.filter(email=email).delete()
-
-            return response
-
-        raise NotAuthenticated("Token Expired")
+        return response
 
 
 class EmailVerifyTokenGenerateAPIView(APIView):

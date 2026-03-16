@@ -31,14 +31,12 @@ class StandardResultsSetPagination(LimitOffsetPagination):
             {
                 "success": True,
                 "message": "Paginated data retrieved",
-                "metadata": {
+                "data": {
                     "count": self.count,
                     "next": self.get_next_link(),
                     "previous": self.get_previous_link(),
-                    "limit": self.limit,
-                    "offset": self.offset,
+                    "results": data,
                 },
-                "data": data,
                 "errors": None,
             }
         )
