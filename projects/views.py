@@ -1,11 +1,10 @@
 import logging
 
-import requests
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.http import QueryDict
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
-from requests.auth import HTTPBasicAuth
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ParseError, PermissionDenied
@@ -254,72 +253,46 @@ class ProjectViewSet(
         access_token = request.user.jira_access_token
         raw_url = instance.jira_url
 
-        if not raw_url.startswith("http"):
-            base_url = f"https://{raw_url}"
-        else:
-            base_url = raw_url
-        base_url = base_url.rstrip("/")
-
-        jira_api_endpoint = (
-            f"{base_url}/rest/api/3/project/{instance.jira_project_id}"
-        )
-
-        jira_payload = {
-            "key": key,
-            "name": title,
-            "description": description,
-            "projectTypeKey": "software",
-            "leadAccountId": request.user.jiraID,
-        }
-
-        auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        try:
+            jira_client = JiraClient(raw_url, request.user.email, access_token)
+        except ValueError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             with transaction.atomic():
                 super().update(request, *args, **kwargs)
 
-                response = requests.put(
-                    jira_api_endpoint,
-                    json=jira_payload,
-                    headers=headers,
-                    auth=auth,
-                    timeout=30,
+                jira_client.update_project(
+                    key=key,
+                    name=title,
+                    description=description,
+                    leadAccountId=request.user.jiraID,
+                    projectId=instance.jira_project_id,
                 )
-                response_data = response.json()
 
-                if response.status_code == 200:
-                    response_serializer = ProjectSerializer(
-                        instance, context={"request": request}
-                    )
-                    return Response(
-                        response_serializer.data,
-                        status=status.HTTP_201_CREATED,
-                    )
+                response_serializer = ProjectSerializer(
+                    instance, context={"request": request}
+                )
+                return Response(
+                    response_serializer.data,
+                    status=status.HTTP_201_CREATED,
+                )
 
-                else:
-                    error_msg = response_data.get(
-                        "errorMessages", ["Unknown Jira Error"]
-                    )[0]
-                    raise ValueError(f"Jira rejected the project: {error_msg}")
-
-        except ValueError as e:
-            return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST,
+        except JiraClientException as e:
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
             )
-        except requests.exceptions.RequestException as e:
             return Response(
-                {
-                    "error": "Network error while contacting Jira. Project creation cancelled.",
-                    "details": str(e),
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"error": str(e), "jira_details": e.response_data},
+                status=status_code,
             )
+
         except Exception as e:
+            logger.exception("Unexpected error during project creation")
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -486,8 +459,8 @@ class ProjectViewSet(
                     )
             else:
                 pm_instance = ProjectMember.objects.filter(
-                        project__id=pk, member=member
-                    ).first()
+                    project__id=pk, member=member
+                ).first()
 
                 if pm_instance:
                     pm_instance.status = ProjectMember.Status.REVOKED
@@ -637,58 +610,38 @@ class ProjectViewSet(
         access_token = user.jira_access_token
         raw_url = project.jira_url
 
-        if not raw_url.startswith("http"):
-            base_url = f"https://{raw_url}"
-        else:
-            base_url = raw_url
-        base_url = base_url.rstrip("/")
-
-        jira_api_endpoint = (
-            f"{base_url}/rest/api/3/project/{project.jira_project_id}/archive"
-        )
-
-        auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
+        try:
+            jira_client = JiraClient(raw_url, request.user.email, access_token)
+        except ValueError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
         try:
             with transaction.atomic():
                 project.status = Project.Status.ARCHIVED
+                project.archived_at = timezone.now()
                 project.save()
 
-                response = requests.post(
-                    jira_api_endpoint, headers=headers, auth=auth, timeout=30
+                jira_client.archive_project(project.jira_project_id)
+
+                return Response(
+                    {"detail": "Project Archived"},
+                    status=status.HTTP_200_OK,
                 )
 
-                if response.status_code == 204:
-                    return Response(
-                        {"detail": "Project archived"},
-                        status=status.HTTP_200_OK,
-                    )
-
-                else:
-                    response_data = response.json()
-                    error_msg = response_data.get(
-                        "errorMessages", ["Unknown Jira Error"]
-                    )[0]
-                    raise ValueError(f"Jira rejected the project: {error_msg}")
-
-        except ValueError as e:
-            return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST,
+        except JiraClientException as e:
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
             )
-        except requests.exceptions.RequestException as e:
             return Response(
-                {
-                    "error": "Network error while contacting Jira. Project creation cancelled.",
-                    "details": str(e),
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"error": str(e), "jira_details": e.response_data},
+                status=status_code,
             )
+
         except Exception as e:
+            logger.exception("Unexpected error during project creation")
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -714,58 +667,38 @@ class ProjectViewSet(
         access_token = user.jira_access_token
         raw_url = project.jira_url
 
-        if not raw_url.startswith("http"):
-            base_url = f"https://{raw_url}"
-        else:
-            base_url = raw_url
-        base_url = base_url.rstrip("/")
-
-        jira_api_endpoint = (
-            f"{base_url}/rest/api/3/project/{project.jira_project_id}/restore"
-        )
-
-        auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
+        try:
+            jira_client = JiraClient(raw_url, request.user.email, access_token)
+        except ValueError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
         try:
             with transaction.atomic():
                 project.status = Project.Status.ACTIVE
+                project.archived_at = None
                 project.save()
 
-                response = requests.post(
-                    jira_api_endpoint, headers=headers, auth=auth, timeout=30
+                jira_client.unarchive_project(project.jira_project_id)
+
+                return Response(
+                    {"detail": "Project Unarchived"},
+                    status=status.HTTP_200_OK,
                 )
 
-                if response.status_code == 200:
-                    return Response(
-                        {"detail": "Project unarchived"},
-                        status=status.HTTP_200_OK,
-                    )
-
-                else:
-                    response_data = response.json()
-                    error_msg = response_data.get(
-                        "errorMessages", ["Unknown Jira Error"]
-                    )[0]
-                    raise ValueError(f"Jira rejected the project: {error_msg}")
-
-        except ValueError as e:
-            return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST,
+        except JiraClientException as e:
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
             )
-        except requests.exceptions.RequestException as e:
             return Response(
-                {
-                    "error": "Network error while contacting Jira. Project creation cancelled.",
-                    "details": str(e),
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"error": str(e), "jira_details": e.response_data},
+                status=status_code,
             )
+
         except Exception as e:
+            logger.exception("Unexpected error during project creation")
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

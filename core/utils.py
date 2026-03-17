@@ -104,3 +104,28 @@ class JiraClient:
             "leadAccountId": lead_account_id,
         }
         return self._request("POST", "/rest/api/3/project", json=payload)
+
+    def update_project(self, key, name, description, lead_account_id, projectId):
+        """
+        Updates an existing software project in Jira using the provided configuration.
+        """
+        payload = {
+            "key": key,
+            "name": name,
+            "description": description,
+            "projectTypeKey": "software",
+            "leadAccountId": lead_account_id,
+        }
+        return self._request("PUT", f"/rest/api/3/project/{projectId}/", json=payload)
+
+    def archive_project(self, projectId):
+        """
+        Archives a software project in Jira using the provided configuration.
+        """
+        return self._request("POST", f"/rest/api/3/project/{projectId}/archive")
+
+    def unarchive_project(self, projectId):
+        """
+        Unarchives a software project in Jira using the provided configuration.
+        """
+        return self._request("POST", f"/rest/api/3/project/{projectId}/restore")
