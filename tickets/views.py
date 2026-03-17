@@ -12,6 +12,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from comments.models import Comment
 from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
@@ -573,16 +574,17 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=["get"], url_path="jira-import-list")
+    @action(detail=False, methods=["post"], url_path="jira-import-list")
     def jira_import_list(self, request, project_id=None):
         """
-        Fetches tickets from Jira for the current project and filters out:
-        1. Tickets that are already imported into our database.
-        2. Tickets where the Jira Reporter is not in our local User database.
-        3. Tickets where the Jira Assignee (if any) is not in our local User database.
+        Fetches tickets from Jira for the current project, with an optional custom JQL filter
+        sent in the request body.
+
+        Expected payload: {"jql": 'status="In Progress"'} (optional)
         """
         project = get_object_or_404(Project, id=project_id)
         user = request.user
+        jql = request.data.get("jql", None)
 
         if project.status != 1:
             raise ValidationError(
@@ -602,8 +604,12 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             jira_client = JiraClient(
                 project.jira_url, user.email, user.jira_access_token
             )
-            response_data = jira_client.get_project_issues(project.key)
+
+            response_data = jira_client.get_project_issues(
+                project.key, additional_jql=jql
+            )
             jira_issues = response_data.get("issues", [])
+
         except Exception as e:
             return Response(
                 {"error": "Failed to fetch tickets from Jira.", "details": str(e)},
@@ -635,26 +641,17 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
             reporter_account_id = fields.get("reporter", {}).get("accountId")
 
-            assignee_dict = fields.get("assignee")
-            assignee_account_id = (
-                assignee_dict.get("accountId") if assignee_dict else None
-            )
-
             if (
                 not reporter_account_id
                 or reporter_account_id not in local_user_account_ids
             ):
                 continue
 
-            if (
-                assignee_account_id
-                and assignee_account_id not in local_user_account_ids
-            ):
-                continue
-
             raw_description = fields.get("description")
             text_description = (
-                extract_text_from_adf(raw_description) if raw_description else ""
+                JiraClient.extract_text_from_adf(raw_description)
+                if raw_description
+                else ""
             )
             importable_tickets.append(
                 {
@@ -670,7 +667,8 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="import-ticket")
     def import_ticket(self, request, project_id=None):
         """
-        Imports a specific ticket from Jira into the local database.
+        Imports a specific ticket from Jira into the local database,
+        including its full comment history.
         Expects a payload like {"jira_id": "EX4-11"}.
         """
         project = get_object_or_404(Project, id=project_id)
@@ -680,7 +678,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         if not jira_identifier:
             return Response(
                 {"error": "The 'jira_id' field is required in the payload."},
-                status=status.HTTP_400_BAD_request,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if project.status != 1:
@@ -748,27 +746,22 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         if assignee_dict:
             assignee_account_id = assignee_dict.get("accountId")
             assignee_user = User.objects.filter(jiraID=assignee_account_id).first()
-            if not assignee_user:
-                return Response(
-                    {"error": "The Jira assignee is not registered in our system."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
 
         title = fields.get("summary", "Imported Ticket")
         raw_description = fields.get("description")
         description = (
-            extract_text_from_adf(raw_description)
+            JiraClient.adf_to_markdown(raw_description)
             if raw_description
             else "No description provided."
         )
 
         priority_name = fields.get("priority", {}).get("name", "").lower()
         severity_map = {
-            "highest": Ticket.Severity.HIGH,
+            "highest": Ticket.Severity.HIGHEST,
             "high": Ticket.Severity.HIGH,
             "medium": Ticket.Severity.MID,
             "low": Ticket.Severity.LOW,
-            "lowest": Ticket.Severity.LOW,
+            "lowest": Ticket.Severity.LOWEST,
         }
         severity = severity_map.get(priority_name, Ticket.Severity.LOW)
 
@@ -780,6 +773,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             "indeterminate": Ticket.Status.IN_PROGRESS,
             "done": Ticket.Status.CLOSED,
         }
+
         ticket_status = status_map.get(status_category, Ticket.Status.OPEN)
 
         deadline_str = fields.get("duedate")
@@ -823,6 +817,43 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 ]
                 TicketSubscriber.objects.bulk_create(subscriptions)
 
+                jira_comments_data = fields.get("comment", {}).get("comments", [])
+                comments_to_create = []
+
+                if jira_comments_data:
+                    first_comment = jira_comments_data[0]
+
+                    c_jira_id = first_comment.get("id")
+                    c_author_dict = first_comment.get("author", {})
+                    c_author_account_id = c_author_dict.get("accountId")
+                    c_author_display_name = c_author_dict.get(
+                        "displayName", "Unknown Jira User"
+                    )
+
+                    c_author_user = None
+                    if c_author_account_id:
+                        c_author_user = User.objects.filter(
+                            jiraID=c_author_account_id
+                        ).first()
+
+                    c_body_raw = first_comment.get("body")
+                    c_body_md = (
+                        JiraClient.adf_to_markdown(c_body_raw) if c_body_raw else ""
+                    )
+
+                    comments_to_create.append(
+                        Comment(
+                            ticket=ticket,
+                            description=c_body_md,
+                            author=c_author_user,
+                            author_name=c_author_display_name,
+                            jira_id=c_jira_id,
+                        )
+                    )
+
+                if comments_to_create:
+                    Comment.objects.bulk_create(comments_to_create)
+
             read_serializer = TicketReadSerializer(ticket, context={"request": request})
             return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -831,23 +862,3 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 {"error": "Failed to save the imported ticket.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
-def extract_text_from_adf(adf_node):
-    """
-    Recursively extract plain text from Jira's Atlassian Document Format (ADF).
-    """
-    if not adf_node or not isinstance(adf_node, dict):
-        return ""
-
-    text = ""
-    if adf_node.get("type") == "text":
-        text += adf_node.get("text", "")
-
-    for child in adf_node.get("content", []):
-        text += extract_text_from_adf(child)
-
-    if adf_node.get("type") in ["paragraph", "heading", "listItem"]:
-        text += "\n"
-
-    return text

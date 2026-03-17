@@ -15,13 +15,15 @@ class Ticket(BaseModel):
         CLOSED = 4, ("Closed")
 
     class Severity(models.IntegerChoices):
-        LOW = 1, ("Low")
-        MID = 2, ("Medium")
-        HIGH = 3, ("High")
+        LOWEST = 1, ("Lowest")
+        LOW = 2, ("Low")
+        MID = 3, ("Medium")
+        HIGH = 4, ("High")
+        HIGHEST = 5, ("Highest")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=100)
-    description = models.TextField()
+    description = models.TextField(null=True, blank=True)
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="tickets"
     )
