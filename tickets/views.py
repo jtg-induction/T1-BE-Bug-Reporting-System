@@ -23,6 +23,7 @@ from tickets.serializers import (
     TicketWriteSerializer,
 )
 from tickets.tasks import (
+    notify_new_subscriber,
     notify_reporter_resolved,
     notify_ticket_subscribers,
     send_deadline_reminder,
@@ -62,7 +63,7 @@ class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 class ProjectTicketViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing tickets within a specific project context.
-    Provides CRUD operations and specific actions like subscribe/unsubscribe.
+    Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .
     """
 
     lookup_url_kwarg = "ticket_id"
@@ -220,7 +221,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def subscribe(self, request, project_id=None, ticket_id=None):
         """
-        Subscribes the authenticated user to the ticket.
+        Subscribes the authenticated user to the ticket and notifies other subscribers.
         """
         ticket = self.get_object()
         user = request.user
@@ -229,6 +230,13 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             user=user,
             ticket=ticket,
             defaults={"status": TicketSubscriber.Status.SUBSCRIBED},
+        )
+
+        subscriber_name = user.email
+        notify_new_subscriber.delay(
+            ticket_id=str(ticket.id),
+            new_subscriber_email=user.email,
+            new_subscriber_name=subscriber_name,
         )
 
         return Response(
@@ -327,6 +335,17 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                         user_id__in=new_member_ids
                     ).delete()
 
+                notify_ticket_subscribers.delay(
+                    ticket_id=str(ticket.id),
+                    changes=[
+                        {
+                            "field": "Project",
+                            "old": project.title,
+                            "new": new_project.title,
+                        }
+                    ],
+                )
+
                 read_serializer = TicketReadSerializer(
                     ticket, context={"request": request}
                 )
@@ -360,6 +379,25 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
         old_task_id = ticket.reminder_task_id
 
+        def get_safe_str(val, is_long=False):
+            if not val:
+                return "None"
+            s = str(val)
+            return s[:97] + "..." if is_long and len(s) > 100 else s
+
+        original_state = {
+            "Title": ticket.title,
+            "Description": get_safe_str(ticket.description, True),
+            "Severity": ticket.get_severity_display() if ticket.severity else "None",
+            "Deadline": ticket.deadline.strftime("%Y-%m-%d")
+            if ticket.deadline
+            else "None",
+            "Assignee": ticket.assignee.email if ticket.assignee else "Unassigned",
+            "Status": ticket.get_status_display(),
+        }
+
+        changes = []
+
         try:
             with transaction.atomic():
                 serializer = self.get_serializer(
@@ -367,6 +405,36 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 )
                 serializer.is_valid(raise_exception=True)
                 updated_ticket = serializer.save(updated_by=user)
+
+                updated_state = {
+                    "Title": updated_ticket.title,
+                    "Description": get_safe_str(updated_ticket.description, True),
+                    "Severity": updated_ticket.get_severity_display()
+                    if updated_ticket.severity
+                    else "None",
+                    "Deadline": updated_ticket.deadline.strftime("%Y-%m-%d")
+                    if updated_ticket.deadline
+                    else "None",
+                    "Assignee": updated_ticket.assignee.email
+                    if updated_ticket.assignee
+                    else "Unassigned",
+                }
+
+                for field in [
+                    "Title",
+                    "Description",
+                    "Severity",
+                    "Deadline",
+                    "Assignee",
+                ]:
+                    if original_state[field] != updated_state[field]:
+                        changes.append(
+                            {
+                                "field": field,
+                                "old": original_state[field],
+                                "new": updated_state[field],
+                            }
+                        )
 
                 if "deadline" in general_data:
                     if old_task_id:
@@ -460,7 +528,26 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                         ticket.closed_at = timezone.now()
                     ticket.save()
 
-                    if project.jira_url and user.jira_access_token and ticket.jira_id:
+                    new_status_display = dict(Ticket.Status.choices).get(
+                        ticket.status, "Unknown"
+                    )
+                    changes.append(
+                        {
+                            "field": "Status",
+                            "old": original_state["Status"],
+                            "new": new_status_display,
+                        }
+                    )
+
+                    skip_jira_transition = (
+                        ticket.prev_status == Ticket.Status.IN_PROGRESS
+                        and ticket.status == Ticket.Status.RESOLVED
+                    ) or (
+                        ticket.prev_status == Ticket.Status.RESOLVED
+                        and ticket.status == Ticket.Status.IN_PROGRESS
+                    )
+
+                    if not skip_jira_transition:
                         jira_client = JiraClient(
                             project.jira_url, user.email, user.jira_access_token
                         )
@@ -468,9 +555,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                             ticket.jira_id, ticket.get_status_display()
                         )
 
-                    notify_ticket_subscribers.delay(
-                        ticket_id=str(ticket.id), new_status=ticket.get_status_display()
-                    )
                     if ticket.status == Ticket.Status.RESOLVED:
                         notify_reporter_resolved.delay(
                             reporter_email=ticket.reporter.email,
@@ -483,13 +567,23 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 read_serializer = TicketReadSerializer(
                     ticket, context={"request": request}
                 )
+
+                changes = [c for c in changes if c["field"] != "Status"]
+                if changes:
+                    notify_ticket_subscribers.delay(
+                        ticket_id=str(ticket.id), changes=changes
+                    )
+
                 return Response(
                     {
                         "data": read_serializer.data,
-                        "error": f"Details saved, but Jira status sync failed: {str(e)}",
+                        "message": f"Details saved, but Jira status sync failed: {str(e)}",
                     },
                     status=status.HTTP_200_OK,
                 )
+
+        if changes:
+            notify_ticket_subscribers.delay(ticket_id=str(ticket.id), changes=changes)
 
         read_serializer = TicketReadSerializer(ticket, context={"request": request})
         return Response(read_serializer.data, status=status.HTTP_200_OK)
@@ -565,7 +659,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             role=ProjectMember.Role.ADMIN,
             status=ProjectMember.Status.ACTIVE,
         ).values_list("project_id", flat=True)
-        print(admin_project_ids)
         compatible_projects = Project.objects.filter(
             id__in=admin_project_ids, status=1, jira_url=current_project.jira_url
         ).exclude(id=current_project.id)

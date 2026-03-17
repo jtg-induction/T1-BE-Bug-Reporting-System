@@ -506,8 +506,8 @@ class JiraClient:
         transitions_data = self._request(
             "GET", f"/rest/api/3/issue/{jira_id}/transitions"
         )
-        transitions = transitions_data.get("transitions", [])
 
+        transitions = transitions_data.get("transitions", [])
         status_map = {
             "open": "to do",
             "in progress": "in progress",
