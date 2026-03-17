@@ -1,24 +1,18 @@
 from datetime import timedelta
 
-import requests
 from celery import current_app
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from requests.auth import HTTPBasicAuth
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.tasks import (
-    notify_reporter_resolved,
-    notify_ticket_subscribers,
-    send_deadline_reminder,
-    send_ticket_assignment_email,
-)
+from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
 from tickets.models import Ticket, TicketSubscriber
@@ -27,13 +21,28 @@ from tickets.serializers import (
     TicketReadSerializer,
     TicketWriteSerializer,
 )
+from tickets.tasks import (
+    notify_reporter_resolved,
+    notify_ticket_subscribers,
+    send_deadline_reminder,
+    send_ticket_assignment_email,
+)
+
+User = get_user_model()
 
 
 class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for listing tickets associated with the authenticated user.
+    """
+
     serializer_class = TicketListSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        """
+        Retrieves tickets where the user is the assignee, reporter, or an active subscriber.
+        """
         user = self.request.user
         return (
             Ticket.objects.filter(
@@ -50,9 +59,17 @@ class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
 
 class ProjectTicketViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing tickets within a specific project context.
+    Provides CRUD operations and specific actions like subscribe/unsubscribe.
+    """
+
     lookup_url_kwarg = "ticket_id"
 
     def get_serializer_class(self):
+        """
+        Determines the appropriate serializer based on the action being performed.
+        """
         if self.action == "list":
             return TicketListSerializer
         if self.action == "retrieve":
@@ -62,11 +79,18 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         return TicketWriteSerializer
 
     def get_queryset(self):
+        """
+        Retrieves all tickets associated with the given project ID.
+        """
         return Ticket.objects.filter(
             project_id=self.kwargs.get("project_id")
         ).select_related("assignee", "reporter", "project")
 
     def create(self, request, *args, **kwargs):
+        """
+        Creates a new ticket within a project and syncs it to Jira.
+        Sets up initial subscriptions and schedules deadline reminders.
+        """
         project_id = self.kwargs.get("project_id")
         project = get_object_or_404(Project, id=project_id)
         user = request.user
@@ -91,71 +115,40 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        response_data = {}
-
         try:
             with transaction.atomic():
                 ticket = serializer.save(project=project, reporter=user)
 
                 if project.jira_url and user.jira_access_token:
-                    url = f"{project.jira_url.rstrip('/')}/rest/api/3/issue"
-                    auth = HTTPBasicAuth(user.email, user.jira_access_token)
-                    headers = {
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                    }
-
-                    fields = {
-                        "project": {"key": project.key},
-                        "summary": ticket.title,
-                        "issuetype": {"name": "Task"},
-                        "description": {
-                            "type": "doc",
-                            "version": 1,
-                            "content": [
-                                {
-                                    "type": "paragraph",
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": ticket.description
-                                            or "No description provided.",
-                                        }
-                                    ],
-                                }
-                            ],
-                        },
-                    }
-
-                    if ticket.severity:
-                        fields["priority"] = {"name": ticket.get_severity_display()}
-
-                    if ticket.assignee and hasattr(ticket.assignee, "jira_account_id"):
-                        fields["assignee"] = {"id": ticket.assignee.jira_account_id}
-
-                    if ticket.deadline:
-                        fields["duedate"] = ticket.deadline.strftime("%Y-%m-%d")
-
-                    payload = {"fields": fields}
-
-                    response = requests.post(
-                        url, json=payload, headers=headers, auth=auth, timeout=10
+                    jira_client = JiraClient(
+                        project.jira_url, user.email, user.jira_access_token
                     )
 
-                    try:
-                        response_data = response.json()
-                    except ValueError:
-                        response_data = {"error": response.text}
+                    assignee_id = (
+                        ticket.assignee.jiraID
+                        if ticket.assignee and hasattr(ticket.assignee, "jiraID")
+                        else None
+                    )
+                    deadline_str = (
+                        ticket.deadline.strftime("%Y-%m-%d")
+                        if ticket.deadline
+                        else None
+                    )
+                    severity_str = (
+                        ticket.get_severity_display() if ticket.severity else None
+                    )
 
-                    if response.status_code == 201:
-                        ticket.jira_id = response_data.get("key")
-                        ticket.save(update_fields=["jira_id"])
-                    else:
-                        error_msgs = response_data.get("errorMessages", [])
-                        field_errors = response_data.get("errors", {})
-                        raise ValueError(
-                            f"Jira rejected the ticket. Errors: {field_errors or error_msgs}"
-                        )
+                    jira_response = jira_client.create_ticket(
+                        project_key=project.key,
+                        title=ticket.title,
+                        description=ticket.description,
+                        severity=severity_str,
+                        assignee_id=assignee_id,
+                        deadline=deadline_str,
+                    )
+
+                    ticket.jira_id = jira_response.get("key")
+                    ticket.save(update_fields=["jira_id"])
 
                 if ticket.assignee:
                     send_ticket_assignment_email.delay(
@@ -207,18 +200,12 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 )
                 return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
-        except ValueError as e:
+        except JiraClientException as e:
             return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except requests.exceptions.RequestException as e:
-            return Response(
-                {
-                    "error": "Network error while contacting Jira. Ticket creation cancelled.",
-                    "details": str(e),
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"error": str(e), "jira_details": e.response_data},
+                status=e.status_code
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except Exception as e:
             return Response(
@@ -231,6 +218,9 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def subscribe(self, request, project_id=None, ticket_id=None):
+        """
+        Subscribes the authenticated user to the ticket.
+        """
         ticket = self.get_object()
         user = request.user
 
@@ -247,6 +237,9 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def unsubscribe(self, request, project_id=None, ticket_id=None):
+        """
+        Unsubscribes the authenticated user from the ticket.
+        """
         ticket = self.get_object()
         user = request.user
 
@@ -262,10 +255,17 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         )
 
     def update(self, request, *args, **kwargs):
+        """
+        Updates an existing ticket. Includes handling for moving tickets between projects,
+        syncing updates with Jira, and re-evaluating deadline reminders.
+        """
         ticket = self.get_object()
         project = ticket.project
         user = request.user
         data = request.data.copy()
+
+        if "deadline" in data and data["deadline"] == "":
+            data["deadline"] = None
 
         if project.status != 1:
             raise ValidationError(
@@ -358,15 +358,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         general_data.pop("status", None)
 
         old_task_id = ticket.reminder_task_id
-        jira_auth = (
-            HTTPBasicAuth(user.email, user.jira_access_token)
-            if user.jira_access_token
-            else None
-        )
-        jira_headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
 
         try:
             with transaction.atomic():
@@ -400,57 +391,56 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                             updated_ticket.reminder_task_id = task.id
                             updated_ticket.save(update_fields=["reminder_task_id"])
 
-                if project.jira_url and jira_auth and updated_ticket.jira_id:
-                    fields = {}
+                if (
+                    project.jira_url
+                    and user.jira_access_token
+                    and updated_ticket.jira_id
+                ):
+                    jira_client = JiraClient(
+                        project.jira_url, user.email, user.jira_access_token
+                    )
+
+                    update_kwargs = {}
                     if "title" in data:
-                        fields["summary"] = updated_ticket.title
+                        update_kwargs["title"] = updated_ticket.title
                     if "description" in data:
-                        fields["description"] = {
-                            "type": "doc",
-                            "version": 1,
-                            "content": [
-                                {
-                                    "type": "paragraph",
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": updated_ticket.description
-                                            or "No description.",
-                                        }
-                                    ],
-                                }
-                            ],
-                        }
+                        update_kwargs["description"] = updated_ticket.description
                     if "severity" in data:
-                        fields["priority"] = {
-                            "name": updated_ticket.get_severity_display()
-                        }
+                        update_kwargs["severity"] = (
+                            updated_ticket.get_severity_display()
+                        )
 
                     if "assignee" in data:
                         if updated_ticket.assignee and hasattr(
-                            updated_ticket.assignee, "jira_account_id"
+                            updated_ticket.assignee, "jiraID"
                         ):
-                            fields["assignee"] = {
-                                "id": updated_ticket.assignee.jira_account_id
-                            }
+                            update_kwargs["assignee_id"] = (
+                                updated_ticket.assignee.jiraID
+                            )
                         else:
-                            fields["assignee"] = None
+                            update_kwargs["clear_assignee"] = True
 
                     if "deadline" in data:
-                        fields["duedate"] = updated_ticket.deadline.strftime("%Y-%m-%d")
+                        if updated_ticket.deadline:
+                            update_kwargs["deadline"] = (
+                                updated_ticket.deadline.strftime("%Y-%m-%d")
+                            )
+                        else:
+                            update_kwargs["clear_deadline"] = True
 
-                    if fields:
-                        url = f"{project.jira_url.rstrip('/')}/rest/api/3/issue/{updated_ticket.jira_id}"
-                        res = requests.put(
-                            url,
-                            json={"fields": fields},
-                            auth=jira_auth,
-                            headers=jira_headers,
-                            timeout=10,
+                    if update_kwargs:
+                        jira_client.update_ticket(
+                            updated_ticket.jira_id, **update_kwargs
                         )
-                        if res.status_code != 204:
-                            raise ValueError(f"Jira rejected field updates: {res.text}")
 
+        except JiraClientException as e:
+            return Response(
+                {
+                    "error": f"General update failed via Jira: {str(e)}",
+                    "jira_details": e.response_data,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Exception as e:
             return Response(
                 {"error": f"General update failed: {str(e)}"},
@@ -469,53 +459,13 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                         ticket.closed_at = timezone.now()
                     ticket.save()
 
-                    if project.jira_url and jira_auth and ticket.jira_id:
-                        jira_url = project.jira_url.rstrip("/")
-
-                        t_res = requests.get(
-                            f"{jira_url}/rest/api/3/issue/{ticket.jira_id}/transitions",
-                            auth=jira_auth,
-                            headers=jira_headers,
-                            timeout=10,
+                    if project.jira_url and user.jira_access_token and ticket.jira_id:
+                        jira_client = JiraClient(
+                            project.jira_url, user.email, user.jira_access_token
                         )
-                        if t_res.status_code == 200:
-                            transitions = t_res.json().get("transitions", [])
-
-                            status_map = {
-                                "open": "to do",
-                                "in progress": "in progress",
-                                "resolved": "in progress",
-                                "closed": "done",
-                            }
-                            jira_target = status_map.get(
-                                ticket.get_status_display().lower()
-                            )
-
-                            trans_id = next(
-                                (
-                                    t["id"]
-                                    for t in transitions
-                                    if t["to"]["name"].lower() == jira_target
-                                ),
-                                None,
-                            )
-
-                            if trans_id:
-                                m_res = requests.post(
-                                    f"{jira_url}/rest/api/3/issue/{ticket.jira_id}/transitions",
-                                    json={"transition": {"id": trans_id}},
-                                    auth=jira_auth,
-                                    headers=jira_headers,
-                                    timeout=10,
-                                )
-                                if m_res.status_code != 204:
-                                    raise ValueError(
-                                        f"Jira status update rejected: {m_res.text}"
-                                    )
-                            else:
-                                raise ValueError(
-                                    f"No valid Jira transition for status: {jira_target}"
-                                )
+                        jira_client.transition_ticket(
+                            ticket.jira_id, ticket.get_status_display()
+                        )
 
                     notify_ticket_subscribers.delay(
                         ticket_id=str(ticket.id), new_status=ticket.get_status_display()
@@ -544,6 +494,10 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         return Response(read_serializer.data, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
+        """
+        Deletes a ticket locally and removes the linked issue from Jira.
+        Revokes any pending deadline reminder tasks.
+        """
         ticket = self.get_object()
         project = ticket.project
         user = request.user
@@ -563,7 +517,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         if not is_admin:
             raise PermissionDenied("You do not have permission to delete this ticket.")
 
-        response_data = {}
         task_id_to_revoke = None
 
         try:
@@ -576,44 +529,18 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 ticket.delete()
 
                 if jira_url and jira_token and jira_id:
-                    url = f"{jira_url.rstrip('/')}/rest/api/3/issue/{jira_id}"
-                    auth = HTTPBasicAuth(user.email, jira_token)
-                    headers = {"Accept": "application/json"}
-
-                    response = requests.delete(url, headers=headers, auth=auth)
-
-                    if response.status_code != 204:
-                        try:
-                            response_data = response.json()
-                        except ValueError:
-                            response_data = {"error": response.text}
-
-                        error_msgs = response_data.get("errorMessages", [])
-                        field_errors = response_data.get("errors", {})
-                        error_detail = (
-                            field_errors or error_msgs or response_data.get("error")
-                        )
-                        raise ValueError(
-                            f"Jira rejected the deletion. Errors: {error_detail}"
-                        )
+                    jira_client = JiraClient(jira_url, user.email, jira_token)
+                    jira_client.delete_ticket(jira_id)
 
             if task_id_to_revoke:
                 current_app.control.revoke(task_id_to_revoke, terminate=True)
 
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        except ValueError as e:
+        except JiraClientException as e:
             return Response(
-                {"error": str(e), "jira_details": response_data},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except requests.exceptions.RequestException as e:
-            return Response(
-                {
-                    "error": "Network error while contacting Jira. Ticket deletion cancelled.",
-                    "details": str(e),
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"error": str(e), "jira_details": e.response_data},
+                status=e.status_code if e.status_code else status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
             return Response(
@@ -626,6 +553,10 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"], url_path="movable_projects")
     def movable_projects(self, request, project_id=None, ticket_id=None):
+        """
+        Returns a list of active projects sharing the same Jira instance
+        where the user has an Admin role, allowing for ticket transfers.
+        """
         current_project = get_object_or_404(Project, id=project_id)
 
         admin_project_ids = ProjectMember.objects.filter(
@@ -642,9 +573,270 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["get"], url_path="jira-import-list")
+    def jira_import_list(self, request, project_id=None):
+        """
+        Fetches tickets from Jira for the current project and filters out:
+        1. Tickets that are already imported into our database.
+        2. Tickets where the Jira Reporter is not in our local User database.
+        3. Tickets where the Jira Assignee (if any) is not in our local User database.
+        """
+        project = get_object_or_404(Project, id=project_id)
+        user = request.user
+
+        if project.status != 1:
+            raise ValidationError(
+                {"project": "Cannot import tickets from an inactive project."}
+            )
+
+        is_member = ProjectMember.objects.filter(
+            project=project, member=user, status=ProjectMember.Status.ACTIVE
+        ).exists()
+
+        if not is_member:
+            raise PermissionDenied(
+                "You do not have permission to view tickets for this project."
+            )
+
+        try:
+            jira_client = JiraClient(
+                project.jira_url, user.email, user.jira_access_token
+            )
+            response_data = jira_client.get_project_issues(project.key)
+            jira_issues = response_data.get("issues", [])
+        except Exception as e:
+            return Response(
+                {"error": "Failed to fetch tickets from Jira.", "details": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_jira_keys = set(
+            Ticket.objects.filter(project=project)
+            .exclude(jira_id__isnull=True)
+            .exclude(jira_id="")
+            .values_list("jira_id", flat=True)
+        )
+
+        local_user_account_ids = set(
+            User.objects.exclude(jiraID__isnull=True)
+            .exclude(jiraID="")
+            .values_list("jiraID", flat=True)
+        )
+
+        importable_tickets = []
+
+        for issue in jira_issues:
+            jira_key = issue.get("key")
+            jira_id = issue.get("id")
+            fields = issue.get("fields", {})
+
+            if jira_key in existing_jira_keys or jira_id in existing_jira_keys:
+                continue
+
+            reporter_account_id = fields.get("reporter", {}).get("accountId")
+
+            assignee_dict = fields.get("assignee")
+            assignee_account_id = (
+                assignee_dict.get("accountId") if assignee_dict else None
+            )
+
+            if (
+                not reporter_account_id
+                or reporter_account_id not in local_user_account_ids
+            ):
+                continue
+
+            if (
+                assignee_account_id
+                and assignee_account_id not in local_user_account_ids
+            ):
+                continue
+
+            raw_description = fields.get("description")
+            text_description = (
+                extract_text_from_adf(raw_description) if raw_description else ""
+            )
+            importable_tickets.append(
+                {
+                    "jira_id": jira_id,
+                    "jira_key": jira_key,
+                    "title": fields.get("summary", ""),
+                    "description": text_description,
+                }
+            )
+
+        return Response(importable_tickets, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="import-ticket")
+    def import_ticket(self, request, project_id=None):
+        """
+        Imports a specific ticket from Jira into the local database.
+        Expects a payload like {"jira_id": "EX4-11"}.
+        """
+        project = get_object_or_404(Project, id=project_id)
+        user = request.user
+        jira_identifier = request.data.get("jira_id")
+
+        if not jira_identifier:
+            return Response(
+                {"error": "The 'jira_id' field is required in the payload."},
+                status=status.HTTP_400_BAD_request,
+            )
+
+        if project.status != 1:
+            raise ValidationError(
+                {"project": "Cannot import tickets into an inactive project."}
+            )
+
+        is_admin = ProjectMember.objects.filter(
+            project=project,
+            member=user,
+            role=ProjectMember.Role.ADMIN,
+            status=ProjectMember.Status.ACTIVE,
+        ).exists()
+
+        if not is_admin:
+            raise PermissionDenied(
+                "You do not have permission to import tickets. Admin role required."
+            )
+
+        if Ticket.objects.filter(project=project, jira_id=jira_identifier).exists():
+            return Response(
+                {"error": "This ticket has already been imported."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            jira_client = JiraClient(
+                project.jira_url, user.email, user.jira_access_token
+            )
+            jira_issue = jira_client.get_ticket(jira_identifier)
+        except JiraClientException as e:
+            return Response(
+                {
+                    "error": f"Failed to fetch ticket from Jira: {str(e)}",
+                    "details": e.response_data,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fields = jira_issue.get("fields", {})
+        actual_jira_key = jira_issue.get("key")
+
+        if Ticket.objects.filter(project=project, jira_id=actual_jira_key).exists():
+            return Response(
+                {"error": "This ticket has already been imported."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reporter_account_id = fields.get("reporter", {}).get("accountId")
+        if not reporter_account_id:
+            return Response(
+                {"error": "Jira ticket has no reporter."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reporter_user = User.objects.filter(jiraID=reporter_account_id).first()
+        if not reporter_user:
+            return Response(
+                {"error": "The Jira reporter is not registered in our system."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assignee_dict = fields.get("assignee")
+        assignee_user = None
+        if assignee_dict:
+            assignee_account_id = assignee_dict.get("accountId")
+            assignee_user = User.objects.filter(jiraID=assignee_account_id).first()
+            if not assignee_user:
+                return Response(
+                    {"error": "The Jira assignee is not registered in our system."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        title = fields.get("summary", "Imported Ticket")
+        raw_description = fields.get("description")
+        description = (
+            extract_text_from_adf(raw_description)
+            if raw_description
+            else "No description provided."
+        )
+
+        priority_name = fields.get("priority", {}).get("name", "").lower()
+        severity_map = {
+            "highest": Ticket.Severity.HIGH,
+            "high": Ticket.Severity.HIGH,
+            "medium": Ticket.Severity.MID,
+            "low": Ticket.Severity.LOW,
+            "lowest": Ticket.Severity.LOW,
+        }
+        severity = severity_map.get(priority_name, Ticket.Severity.LOW)
+
+        status_category = (
+            fields.get("status", {}).get("statusCategory", {}).get("key", "")
+        )
+        status_map = {
+            "new": Ticket.Status.OPEN,
+            "indeterminate": Ticket.Status.IN_PROGRESS,
+            "done": Ticket.Status.CLOSED,
+        }
+        ticket_status = status_map.get(status_category, Ticket.Status.OPEN)
+
+        deadline_str = fields.get("duedate")
+        deadline = None
+        if deadline_str:
+            from datetime import datetime
+
+            from django.utils.dateparse import parse_date
+
+            parsed_date = parse_date(deadline_str)
+            if parsed_date:
+                deadline = timezone.make_aware(
+                    datetime.combine(parsed_date, datetime.min.time())
+                )
+
+        try:
+            with transaction.atomic():
+                ticket = Ticket.objects.create(
+                    title=title,
+                    description=description,
+                    project=project,
+                    reporter=reporter_user,
+                    assignee=assignee_user,
+                    status=ticket_status,
+                    severity=severity,
+                    deadline=deadline,
+                    jira_id=actual_jira_key,
+                )
+
+                users_to_subscribe = {ticket.reporter}
+                if ticket.assignee:
+                    users_to_subscribe.add(ticket.assignee)
+
+                subscriptions = [
+                    TicketSubscriber(
+                        user=u,
+                        ticket=ticket,
+                        status=TicketSubscriber.Status.SUBSCRIBED,
+                    )
+                    for u in users_to_subscribe
+                ]
+                TicketSubscriber.objects.bulk_create(subscriptions)
+
+            read_serializer = TicketReadSerializer(ticket, context={"request": request})
+            return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response(
+                {"error": "Failed to save the imported ticket.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
 def extract_text_from_adf(adf_node):
-    """Recursively extract plain text from Jira's Atlassian Document Format (ADF)."""
+    """
+    Recursively extract plain text from Jira's Atlassian Document Format (ADF).
+    """
     if not adf_node or not isinstance(adf_node, dict):
         return ""
 
