@@ -72,16 +72,16 @@ class ProjectMemberFilter(django_filters.FilterSet):
     designation = django_filters.ChoiceFilter(field_name="member__designation", choices=User.Designation.choices)
     
     role__in = NumberInFilter(field_name="role", lookup_expr="in")
-    designation__in = NumberInFilter(field_name="member__designation", lookup_expr="in")
+    designation__in = CharInFilter(field_name="member__designation", lookup_expr="in")
     first_name__in = CharInFilter(field_name="member__first_name")
     last_name__in = CharInFilter(field_name="member__last_name")
     email__in = CharInFilter(field_name="member__email")
 
     role__ne = NotEqualFilter(field_name="role")
     designation__ne = NotEqualFilter(field_name="member__designation")
-    first_name__ne = NotEqualFilter(field_name="member__first_name")
-    last_name__ne = NotEqualFilter(field_name="member__last_name")
-    email__ne = NotEqualFilter(field_name="member__email")
+    first_name__in = CharInFilter(field_name="member__first_name", lookup_expr="in")
+    last_name__in = CharInFilter(field_name="member__last_name", lookup_expr="in")
+    email__in = CharInFilter(field_name="member__email", lookup_expr="in")
     
     first_name__noticontains = NotContainsFilter(field_name="member__first_name")
     last_name__noticontains = NotContainsFilter(field_name="member__last_name")

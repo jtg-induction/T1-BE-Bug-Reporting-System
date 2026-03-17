@@ -3,6 +3,7 @@ import logging
 import requests
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
+from django.http import QueryDict
 from django_filters.rest_framework import DjangoFilterBackend
 from requests.auth import HTTPBasicAuth
 from rest_framework import mixins, status, viewsets
@@ -64,24 +65,22 @@ class ProjectViewSet(
         },
     }
 
-    def filter_queryset(self, queryset):
+    def _remap_params(self, query_params, mapping):
+        """
+        Transforms API-facing keys into internal database-facing keys.
+        Handles both standard filters (field__lookup) and the 'ordering' key.
+        """
+        new_params = QueryDict(mutable=True)
 
-        params = self.request.query_params.copy()
-        mapping = self.field_maps.get(self.action, {})
-
-        new_params = {}
-
-        for key, value in params.items():
+        for key, value in query_params.items():
             if key == "ordering":
                 desc = value.startswith("-")
                 field = value.lstrip("-")
-
                 mapped = mapping.get(field)
-
                 if mapped:
-                    value = f"-{mapped}" if desc else mapped
-
-                new_params[key] = value
+                    new_params[key] = f"-{mapped}" if desc else mapped
+                else:
+                    new_params[key] = value
                 continue
 
             parts = key.split("__")
@@ -89,26 +88,45 @@ class ProjectViewSet(
             lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
 
             mapped = mapping.get(field)
-
             if mapped:
-                new_key = mapped
-                if lookup:
-                    new_key = f"{mapped}__{lookup}"
+                new_key = f"{mapped}__{lookup}" if lookup else mapped
                 new_params[new_key] = value
             else:
-                new_params[key] = value
+                new_params[new_key] = value
 
-        request = self.request._request
-        request.GET = request.GET.copy()
-        request.GET.clear()
-        request.GET.update(new_params)
+        return new_params
 
+    def filter_queryset(self, queryset):
         if self.action == "get_all_members":
             self.filterset_class = ProjectMemberFilter
         else:
             self.filterset_class = ProjectFilter
 
-        return super().filter_queryset(queryset)
+        mapping = self.field_maps.get(self.action, {})
+        transformed_data = self._remap_params(
+            self.request.query_params, mapping
+        )
+
+        filterset = self.filterset_class(
+            data=transformed_data,
+            queryset=queryset,
+            request=self.request,
+        )
+        if filterset.is_valid():
+            queryset = filterset.qs
+
+        original_params = self.request._request.GET
+        try:
+            self.request._request.GET = transformed_data
+            for backend in self.filter_backends:
+                if issubclass(backend, OrderingFilter):
+                    queryset = backend().filter_queryset(
+                        self.request, queryset, self
+                    )
+        finally:
+            self.request._request.GET = original_params
+
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "get_all_members":
@@ -157,7 +175,9 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, request.user.email, access_token)
         except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             with transaction.atomic():
@@ -199,7 +219,8 @@ class ProjectViewSet(
                 else status.HTTP_503_SERVICE_UNAVAILABLE
             )
             return Response(
-                {"error": str(e), "jira_details": e.response_data}, status=status_code
+                {"error": str(e), "jira_details": e.response_data},
+                status=status_code,
             )
 
         except Exception as e:
@@ -223,7 +244,9 @@ class ProjectViewSet(
                 "You must be an active Admin of this project to update its details."
             )
 
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer = self.get_serializer(
+            instance, data=request.data, partial=True
+        )
         serializer.is_valid(raise_exception=True)
         key = instance.key
         title = serializer.validated_data.get("title")
@@ -237,7 +260,9 @@ class ProjectViewSet(
             base_url = raw_url
         base_url = base_url.rstrip("/")
 
-        jira_api_endpoint = f"{base_url}/rest/api/3/project/{instance.jira_project_id}"
+        jira_api_endpoint = (
+            f"{base_url}/rest/api/3/project/{instance.jira_project_id}"
+        )
 
         jira_payload = {
             "key": key,
@@ -248,14 +273,21 @@ class ProjectViewSet(
         }
 
         auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
 
         try:
             with transaction.atomic():
                 super().update(request, *args, **kwargs)
 
                 response = requests.put(
-                    jira_api_endpoint, json=jira_payload, headers=headers, auth=auth
+                    jira_api_endpoint,
+                    json=jira_payload,
+                    headers=headers,
+                    auth=auth,
+                    timeout=30,
                 )
                 response_data = response.json()
 
@@ -264,7 +296,8 @@ class ProjectViewSet(
                         instance, context={"request": request}
                     )
                     return Response(
-                        response_serializer.data, status=status.HTTP_201_CREATED
+                        response_serializer.data,
+                        status=status.HTTP_201_CREATED,
                     )
 
                 else:
@@ -305,8 +338,8 @@ class ProjectViewSet(
         if not project:
             raise NotFound("Project does not exist")
 
-        if not inviter:
-            raise NotFound("User does not exist")
+        if not invited:
+            raise NotFound("Invited User does not exist")
 
         pm_instance = ProjectMember.objects.filter(
             member=invited, project=project
@@ -331,7 +364,8 @@ class ProjectViewSet(
 
         send_invitation_email.delay(pk, project.title, invited.email)
         return Response(
-            {"detail": "User invited to project"}, status=status.HTTP_201_CREATED
+            {"detail": "User invited to project"},
+            status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["post"], url_path="accept")
@@ -342,7 +376,9 @@ class ProjectViewSet(
         if not project:
             raise NotFound("Project does not exist")
 
-        pm_instance = ProjectMember.objects.filter(member=user, project=project).first()
+        pm_instance = ProjectMember.objects.filter(
+            member=user, project=project
+        ).first()
 
         if pm_instance:
             if pm_instance.status == ProjectMember.Status.ACTIVE:
@@ -369,7 +405,9 @@ class ProjectViewSet(
         if not project:
             raise NotFound("Project does not exist")
 
-        pm_instance = ProjectMember.objects.filter(member=user, project=project).first()
+        pm_instance = ProjectMember.objects.filter(
+            member=user, project=project
+        ).first()
 
         if pm_instance:
             if pm_instance.status == ProjectMember.Status.ACTIVE:
@@ -379,7 +417,7 @@ class ProjectViewSet(
                 pm_instance.status = ProjectMember.Status.REJECTED
                 pm_instance.save()
                 return Response(
-                    {"detail": "Added to project successfully"},
+                    {"detail": "Rejected project invite successfully"},
                     status=status.HTTP_200_OK,
                 )
 
@@ -391,7 +429,7 @@ class ProjectViewSet(
     @action(detail=True, methods=["post"], url_path="revoke")
     def revoke_member(self, request, pk=None):
         admin = request.user
-        member = User.objects.filter(id=request.data["user_id"]).first()
+        member = request.data["user_id"]
         project = Project.objects.filter(id=pk).first()
 
         if not project:
@@ -400,33 +438,20 @@ class ProjectViewSet(
         if not member:
             raise NotFound("User does not exist")
 
-        is_admin = ProjectMember.objects.filter(project__id=pk, member=admin).first()
+        is_admin = ProjectMember.objects.filter(
+            project__id=pk, member=admin, role=ProjectMember.Role.ADMIN
+        ).exists()
 
-        if is_admin:
+        is_member_admin = ProjectMember.objects.filter(
+            project__id=pk, member__id=member, role=ProjectMember.Role.ADMIN
+        )
+
+        if admin == member:
             if project.owner == member:
                 raise PermissionDenied(
                     "Owner has to make someone else the owner before leaving the project"
                 )
-
             else:
-                pm_instance = ProjectMember.objects.filter(
-                    project__id=pk, member=member
-                ).first()
-
-                if pm_instance:
-                    pm_instance.status = ProjectMember.Status.REVOKED
-                    pm_instance.save()
-
-                    return Response(
-                        {"detail": "User removed from project"},
-                        status=status.HTTP_200_OK,
-                    )
-
-                else:
-                    raise NotFound("User not in the Project")
-
-        else:
-            if member == admin:
                 pm_instance = ProjectMember.objects.filter(
                     project__id=pk, member=member
                 ).first()
@@ -440,7 +465,40 @@ class ProjectViewSet(
                         status=status.HTTP_200_OK,
                     )
 
-            raise PermissionDenied("Only admins can remove members from a project")
+        if is_admin:
+            if is_member_admin:
+                if project.owner == admin:
+                    pm_instance = ProjectMember.objects.filter(
+                        project__id=pk, member=member
+                    ).first()
+
+                    if pm_instance:
+                        pm_instance.status = ProjectMember.Status.REVOKED
+                        pm_instance.save()
+
+                        return Response(
+                            {"detail": "You are removed from project"},
+                            status=status.HTTP_200_OK,
+                        )
+                else:
+                    raise PermissionDenied(
+                        "Admins can be removed by owner only"
+                    )
+            else:
+                pm_instance = ProjectMember.objects.filter(
+                        project__id=pk, member=member
+                    ).first()
+
+                if pm_instance:
+                    pm_instance.status = ProjectMember.Status.REVOKED
+                    pm_instance.save()
+
+                    return Response(
+                        {"detail": "User removed from project"},
+                        status=status.HTTP_200_OK,
+                    )
+        else:
+            raise NotFound("Only Admins can remove from the Project")
 
     @action(detail=True, methods=["post"], url_path="role")
     def change_role(self, request, pk=None):
@@ -455,8 +513,12 @@ class ProjectViewSet(
         if not member:
             raise NotFound("User does not exist")
 
-        pm_admin = ProjectMember.objects.filter(member=admin, project=project).first()
-        pm_member = ProjectMember.objects.filter(member=member, project=project).first()
+        pm_admin = ProjectMember.objects.filter(
+            member=admin, project=project
+        ).first()
+        pm_member = ProjectMember.objects.filter(
+            member=member, project=project
+        ).first()
 
         if role == 2:
             if project.owner == admin:
@@ -467,16 +529,26 @@ class ProjectViewSet(
                 project.owner = member
                 project.save()
                 return Response(
-                    {"detail": "Owner of project changed"}, status=status.HTTP_200_OK
+                    {"detail": "Owner of project changed"},
+                    status=status.HTTP_200_OK,
                 )
             else:
-                return PermissionDenied("You are not the owner of this project")
+                return PermissionDenied(
+                    "You are not the owner of this project"
+                )
 
-        pm_admin = ProjectMember.objects.filter(member=admin, project=project).first()
-        pm_member = ProjectMember.objects.filter(member=member, project=project).first()
+        pm_admin = ProjectMember.objects.filter(
+            member=admin, project=project
+        ).first()
+        pm_member = ProjectMember.objects.filter(
+            member=member, project=project
+        ).first()
 
         if pm_admin.role == ProjectMember.Role.ADMIN:
-            if pm_member.role == ProjectMember.Role.ADMIN and project.owner != admin:
+            if (
+                pm_member.role == ProjectMember.Role.ADMIN
+                and project.owner != admin
+            ):
                 raise ParseError("Can't change role of another admin")
 
             else:
@@ -512,10 +584,14 @@ class ProjectViewSet(
         members = self.filter_queryset(members)
         page = self.paginate_queryset(members)
         if page is not None:
-            serializer = self.get_serializer(page, many=True, context={"user": user})
+            serializer = self.get_serializer(
+                page, many=True, context={"user": user}
+            )
             return self.get_paginated_response(serializer.data)
 
-        serializer = self.get_serializer(members, many=True, context={"user": user})
+        serializer = self.get_serializer(
+            members, many=True, context={"user": user}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="available_members")
@@ -536,7 +612,9 @@ class ProjectViewSet(
             user_projects__status=ProjectMember.Status.ACTIVE,
         )
 
-        serializer = self.get_serializer(members, many=True, context={"user": user})
+        serializer = self.get_serializer(
+            members, many=True, context={"user": user}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="archive")
@@ -570,18 +648,24 @@ class ProjectViewSet(
         )
 
         auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
 
         try:
             with transaction.atomic():
                 project.status = Project.Status.ARCHIVED
                 project.save()
 
-                response = requests.post(jira_api_endpoint, headers=headers, auth=auth)
+                response = requests.post(
+                    jira_api_endpoint, headers=headers, auth=auth, timeout=30
+                )
 
                 if response.status_code == 204:
                     return Response(
-                        {"detail": "Project archived"}, status=status.HTTP_200_OK
+                        {"detail": "Project archived"},
+                        status=status.HTTP_200_OK,
                     )
 
                 else:
@@ -641,18 +725,24 @@ class ProjectViewSet(
         )
 
         auth = HTTPBasicAuth(request.user.email, access_token)
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
 
         try:
             with transaction.atomic():
                 project.status = Project.Status.ACTIVE
                 project.save()
 
-                response = requests.post(jira_api_endpoint, headers=headers, auth=auth)
+                response = requests.post(
+                    jira_api_endpoint, headers=headers, auth=auth, timeout=30
+                )
 
                 if response.status_code == 200:
                     return Response(
-                        {"detail": "Project unarchived"}, status=status.HTTP_200_OK
+                        {"detail": "Project unarchived"},
+                        status=status.HTTP_200_OK,
                     )
 
                 else:

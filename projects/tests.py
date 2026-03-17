@@ -24,7 +24,7 @@ class ProjectViewSetTestCase(APITestCase):
         """
         self.login = reverse("core:login")
         self.list_url = reverse("project-list")
-        self.archived_url = reverse("project-archived-projects")
+        self.archived_url = f"{self.list_url}?status=archived"
         self.user = User.objects.create_user(
             first_name="test",
             last_name="user",

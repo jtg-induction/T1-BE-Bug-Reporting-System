@@ -1,18 +1,20 @@
-from celery import shared_task
 import os
-from dotenv import load_dotenv
-from django.core.mail import EmailMessage
+from urllib.parse import urlencode
 
-load_dotenv()
-FRONTEND_BASE_URL=os.getenv("FRONTEND_BASE_URL")
+from celery import shared_task
+from django.core.mail import EmailMessage
+from html import escape
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
+
 
 @shared_task(bind=True, max_retries=3)
 def send_verification_email(self, email, token):
-    
-    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?token={token}&email={email}"
-    
+
+    params = urlencode({"token": str(token), "email": email})
+    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?{params}"
+
     subject = "Let's get you started!"
-    
+
     html_content = f"""
         <table width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f5f5f5">
     <tr>
@@ -42,24 +44,26 @@ def send_verification_email(self, email, token):
     </tr>
 </table>
     """
-    
+
     email_message = EmailMessage(
-        subject=subject,
-        body=html_content,
-        to=[email]
+        subject=subject, body=html_content, to=[email]
     )
-    
+
     email_message.content_subtype = "html"
-    email_message.send()
-    
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
+
+
 @shared_task(bind=True, max_retries=3)
 def send_invitation_email(self, pid, title, email):
-    
-    accept_url = f"{FRONTEND_BASE_URL}/project/{pid}/accept"
-    reject_url = f"{FRONTEND_BASE_URL}/project/{pid}/reject"
-    
+
+    accept_url = f"{FRONTEND_BASE_URL}/projects/{pid}/accept"
+    reject_url = f"{FRONTEND_BASE_URL}/projects/{pid}/reject"
+    safe_title = escape(title)
     subject = "Ready for a new Journey?"
-    
+
     html_content = f"""
         <table width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f5f5f5">
     <tr>
@@ -68,7 +72,7 @@ def send_invitation_email(self, pid, title, email):
                 <tr>
                     <td>
                         <h2>Hello User,</h2>
-                        <p>You have been invited to the Project {title}</p>
+                        <p>You have been invited to the Project {safe_title}</p>
                         
                         <!-- Bulletproof Button -->
                         <table cellspacing="4" cellpadding="0" border="0">
@@ -92,12 +96,13 @@ def send_invitation_email(self, pid, title, email):
     </tr>
 </table>
     """
-    
+
     email_message = EmailMessage(
-        subject=subject,
-        body=html_content,
-        to=[email]
+        subject=subject, body=html_content, to=[email]
     )
-    
+
     email_message.content_subtype = "html"
-    email_message.send()
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
