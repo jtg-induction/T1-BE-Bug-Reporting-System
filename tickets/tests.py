@@ -13,9 +13,18 @@ User = get_user_model()
 
 @pytest.mark.django_db
 class ProjectTicketViewSetTestCase(APITestCase):
+    """
+    Test suite for the ProjectTicketViewSet.
+    Covers CRUD operations, Jira synchronization, permissions, and custom ticket actions.
+    """
+
     login = reverse("core:login")
 
     def setUp(self):
+        """
+        Set up the testing environment.
+        Initializes an Admin user, a Developer user, active projects, roles, and a base ticket.
+        """
         self.admin_user = User.objects.create_user(
             first_name="Admin",
             last_name="User",
@@ -86,7 +95,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
             assignee=self.dev_user,
             title="Test Ticket",
             description="Test Description",
-            jira_id="PROJ1-123",
+            jira_key="PROJ1-123",
             status=Ticket.Status.OPEN,
         )
 
@@ -95,6 +104,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
     @patch("requests.request")
     def test_create_ticket_success_as_admin(self, mock_request):
+        """
+        Test that an Admin user can successfully create a new ticket
+        and synchronize it to the connected Jira instance.
+        """
         mock_resp = MagicMock()
         mock_resp.status_code = 201
         mock_resp.text = "dummy"
@@ -110,15 +123,18 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
         response = self.client.post(self.list_url, data)
         self.assertEqual(201, response.status_code)
-        self.assertEqual(response.data["jira_id"], "PROJ1-124")
-        self.assertTrue(Ticket.objects.filter(jira_id="PROJ1-124").exists())
+        self.assertEqual(response.data["jira_key"], "PROJ1-124")
+        self.assertTrue(Ticket.objects.filter(jira_key="PROJ1-124").exists())
         self.assertTrue(
             TicketSubscriber.objects.filter(
-                ticket__jira_id="PROJ1-124", user=self.dev_user
+                ticket__jira_key="PROJ1-124", user=self.dev_user
             ).exists()
         )
 
     def test_create_ticket_denied_for_dev(self):
+        """
+        Test that a standard Developer user is restricted from creating a new ticket.
+        """
         self.client.force_authenticate(self.dev_user)
 
         data = {"title": "New Ticket", "description": "New description"}
@@ -127,6 +143,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
     @patch("requests.request")
     def test_create_ticket_jira_rejection(self, mock_request):
+        """
+        Test that ticket creation fails cleanly locally if the Jira API
+        rejects the creation request.
+        """
         mock_resp = MagicMock()
         mock_resp.status_code = 400
         mock_resp.text = "dummy"
@@ -141,6 +161,11 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
     @patch("requests.request")
     def test_update_ticket_status_success(self, mock_request):
+        """
+        Test that updating a ticket's status locally successfully finds and
+        triggers the correct workflow transition in Jira.
+        """
+
         def request_side_effect(method, url, **kwargs):
             mock_resp = MagicMock()
             if method == "GET" and "transitions" in url:
@@ -169,6 +194,11 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.assertEqual(self.ticket.status, Ticket.Status.IN_PROGRESS)
 
     def test_move_ticket_success(self):
+        """
+        Test that an Admin can move a ticket to a new project.
+        Ensures the ticket unassigns if the assignee isn't in the new project
+        and cleans up stale subscriber records.
+        """
         TicketSubscriber.objects.create(
             user=self.dev_user,
             ticket=self.ticket,
@@ -190,6 +220,9 @@ class ProjectTicketViewSetTestCase(APITestCase):
         )
 
     def test_move_ticket_denied_for_non_admin(self):
+        """
+        Test that a non-admin user is blocked from moving a ticket to another project.
+        """
         self.client.force_authenticate(self.dev_user)
 
         data = {"project_id": str(self.project2.id)}
@@ -198,6 +231,9 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.assertEqual(403, response.status_code)
 
     def test_delete_ticket_denied_for_dev(self):
+        """
+        Test that a standard Developer cannot delete a ticket.
+        """
         self.client.force_authenticate(self.dev_user)
 
         response = self.client.delete(self.detail_url)
@@ -205,6 +241,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.assertTrue(Ticket.objects.filter(id=self.ticket.id).exists())
 
     def test_subscribe_ticket(self):
+        """
+        Test that a user can successfully create or update a subscription
+        to a ticket's notifications.
+        """
         url = f"{self.detail_url}subscribe/"
         response = self.client.post(url)
 
@@ -218,6 +258,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
         )
 
     def test_unsubscribe_ticket(self):
+        """
+        Test that a user can successfully change their subscription status
+        to UNSUBSCRIBED.
+        """
         TicketSubscriber.objects.create(
             user=self.admin_user,
             ticket=self.ticket,
@@ -231,6 +275,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.assertEqual(sub.status, TicketSubscriber.Status.UNSUBSCRIBED)
 
     def test_get_movable_projects(self):
+        """
+        Test retrieving a list of compatible active projects that a ticket
+        can be moved to based on the current user's admin roles.
+        """
         url = f"{self.detail_url}movable_projects/"
         response = self.client.get(url)
 
@@ -240,6 +288,11 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
     @patch("requests.request")
     def test_jira_import_list_success(self, mock_request):
+        """
+        Test fetching a clean list of Jira issues available for import.
+        Ensures the endpoint correctly parses Jira fields and ignores issues
+        with unmapped reporters.
+        """
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "dummy"
@@ -279,6 +332,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
 
     @patch("requests.request")
     def test_import_ticket_success(self, mock_request):
+        """
+        Test importing a single Jira issue into the local database,
+        ensuring fields, statuses, and users are mapped correctly.
+        """
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "dummy"
@@ -305,20 +362,24 @@ class ProjectTicketViewSetTestCase(APITestCase):
         mock_request.return_value = mock_resp
 
         url = f"{self.list_url}import-ticket/"
-        data = {"jira_id": "PROJ1-1000"}
+        data = {"jira_key": "PROJ1-1000"}
 
         response = self.client.post(url, data)
         self.assertEqual(201, response.status_code)
 
-        imported_ticket = Ticket.objects.get(jira_id="PROJ1-1000")
+        imported_ticket = Ticket.objects.get(jira_key="PROJ1-1000")
         self.assertEqual(imported_ticket.title, "Newly Imported Ticket")
         self.assertEqual(imported_ticket.status, Ticket.Status.IN_PROGRESS)
         self.assertEqual(imported_ticket.severity, Ticket.Severity.HIGH)
         self.assertEqual(imported_ticket.assignee, self.dev_user)
 
     def test_import_ticket_already_exists(self):
+        """
+        Test that attempting to import an issue that already exists
+        locally returns a 400 error.
+        """
         url = f"{self.list_url}import-ticket/"
-        data = {"jira_id": "PROJ1-123"}
+        data = {"jira_key": "PROJ1-123"}
 
         response = self.client.post(url, data)
         self.assertEqual(400, response.status_code)

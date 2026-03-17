@@ -8,13 +8,23 @@ from projects.models import Project
 
 
 class Ticket(BaseModel):
+    """
+    Model representing a distinct piece of work, bug, or task within a project.
+
+    Inherits from BaseModel to support soft-delete and auditing.
+    """
+
     class Status(models.IntegerChoices):
+        """Enumeration for the permissible lifecycle states of a ticket."""
+
         OPEN = 1, ("Open")
         IN_PROGRESS = 2, ("In Progress")
         RESOLVED = 3, ("Resolved")
         CLOSED = 4, ("Closed")
 
     class Severity(models.IntegerChoices):
+        """Enumeration for the priority or severity levels of a ticket."""
+
         LOWEST = 1, ("Lowest")
         LOW = 2, ("Low")
         MID = 3, ("Medium")
@@ -51,15 +61,24 @@ class Ticket(BaseModel):
     deadline = models.DateTimeField(null=True, blank=True)
     status_updated_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
-    jira_id = models.CharField(max_length=100, null=True, blank=True)
+    jira_key = models.CharField(max_length=100, null=True, blank=True)
     reminder_task_id = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):
+        """Return the string representation of the ticket (title)."""
         return self.title
 
 
 class TicketSubscriber(BaseModel):
+    """
+    Model representing a user's subscription to a specific ticket for notifications.
+
+    Inherits from BaseModel to support soft-delete and auditing.
+    """
+
     class Status(models.IntegerChoices):
+        """Enumeration for the subscription state of a user to a ticket."""
+
         UNSUBSCRIBED = 1, "Unsubscribed"
         SUBSCRIBED = 2, "Subscribed"
 
@@ -75,6 +94,8 @@ class TicketSubscriber(BaseModel):
     status = models.IntegerField(choices=Status.choices, default=Status.SUBSCRIBED)
 
     class Meta:
+        """Metadata options for the TicketSubscriber model."""
+
         constraints = [
             models.UniqueConstraint(
                 fields=["user", "ticket"], name="unique_ticket_subscription"
@@ -83,4 +104,5 @@ class TicketSubscriber(BaseModel):
         verbose_name = "Ticket Subscriber"
 
     def __str__(self):
+        """Return the string representation of the subscriber (email, ticket title, and status)."""
         return f"{self.user.email} : {self.ticket.title} ({self.get_status_display()})"

@@ -5,6 +5,12 @@ from tickets.models import Ticket, TicketSubscriber
 
 
 class TicketListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for handling list views of Ticket model instances.
+    Transforms relational fields into readable formats and dynamically evaluates
+    the requesting user's subscription status.
+    """
+
     assignee = serializers.EmailField(source="assignee.email", read_only=True)
     reporter = serializers.EmailField(source="reporter.email", read_only=True)
     project = serializers.CharField(source="project.key", read_only=True)
@@ -12,6 +18,10 @@ class TicketListSerializer(serializers.ModelSerializer):
     is_subscribed = serializers.SerializerMethodField()
 
     class Meta:
+        """
+        Metadata options for TicketListSerializer.
+        """
+
         model = Ticket
         fields = [
             "id",
@@ -23,40 +33,63 @@ class TicketListSerializer(serializers.ModelSerializer):
             "severity",
             "deadline",
             "project_id",
-            "jira_id",
+            "jira_key",
             "is_subscribed",
+            "created_at",
         ]
+        read_only_fields = fields
 
     def get_is_subscribed(self, obj):
+        """
+        Retrieves the subscription status of the currently authenticated user making the request.
+        """
         request = self.context.get("request")
+        if not request or not request.user:
+            return False
 
-        if request:
-            return TicketSubscriber.objects.filter(
-                ticket=obj, user=request.user, status=TicketSubscriber.Status.SUBSCRIBED
-            ).exists()
-
-        return False
+        return TicketSubscriber.objects.filter(
+            ticket=obj, user=request.user, status=TicketSubscriber.Status.SUBSCRIBED
+        ).exists()
 
 
 class TicketReadSerializer(TicketListSerializer):
+    """
+    Serializer for retrieving detailed information about a single Ticket instance.
+    Inherits from TicketListSerializer and expands upon it by including the description,
+    project active status, and calculating the user's specific permission tier.
+    """
+
     permission_class = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
 
     class Meta(TicketListSerializer.Meta):
-        fields = TicketListSerializer.Meta.fields + ["description", "permission_class"]
+        """
+        Metadata options for TicketReadSerializer.
+        """
+
+        fields = TicketListSerializer.Meta.fields + [
+            "description",
+            "permission_class",
+            "is_active",
+        ]
         read_only_fields = fields
 
     def get_permission_class(self, obj):
+        """
+        Calculates an integer-based permission tier for the requesting user based on their relationship
+        to the ticket and project. Used by the frontend for conditional UI rendering.
+
+        Hierarchy: 4 (Reporter) > 3 (Admin) > 2 (Assignee) > 1 (Normal Dev)
+        """
         request = self.context.get("request")
         if not request or not hasattr(request, "user"):
             return 1
 
         user = request.user
 
-        # Reporter : 4
         if obj.reporter == user:
             return 4
 
-        # Admin : 3
         is_admin = ProjectMember.objects.filter(
             project=obj.project,
             member=user,
@@ -67,16 +100,29 @@ class TicketReadSerializer(TicketListSerializer):
         if is_admin:
             return 3
 
-        # Assignee : 2
         if obj.assignee == user:
             return 2
 
-        # Normal Dev : 1
         return 1
+
+    def get_is_active(self, obj):
+        """
+        Evaluates whether the ticket's parent project is currently active.
+        """
+        return obj.project.status == 1
 
 
 class TicketWriteSerializer(serializers.ModelSerializer):
+    """
+    Serializer strictly for creating and updating Ticket model instances.
+    Exposes only the core fields permissible to be modified via POST, PUT, or PATCH requests.
+    """
+
     class Meta:
+        """
+        Metadata options for TicketWriteSerializer.
+        """
+
         model = Ticket
         fields = [
             "id",

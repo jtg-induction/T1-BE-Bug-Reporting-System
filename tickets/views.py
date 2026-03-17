@@ -4,11 +4,14 @@ from celery import current_app
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
+from django.http import QueryDict
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -16,6 +19,7 @@ from comments.models import Comment
 from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
+from tickets.filters import TicketFilter
 from tickets.models import Ticket, TicketSubscriber
 from tickets.serializers import (
     TicketListSerializer,
@@ -88,6 +92,87 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             project_id=self.kwargs.get("project_id")
         ).select_related("assignee", "reporter", "project")
 
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = [
+        "id",
+        "title",
+        "reporter__email",
+        "assignee__email",
+        "severity",
+        "status",
+        "deadline",
+        "created_at",
+    ]
+
+    field_maps = {
+        "list": {
+            "reporter": "reporter__email",
+            "assignee": "assignee__email",
+        }
+    }
+
+    def _remap_params(self, query_params, mapping):
+        """
+        Transforms API-facing keys into internal database-facing keys.
+        Handles both standard filters (field__lookup) and the 'ordering' key.
+        """
+        new_params = QueryDict(mutable=True)
+
+        for key, value in query_params.items():
+            if key == "ordering":
+                desc = value.startswith("-")
+                field = value.lstrip("-")
+                mapped = mapping.get(field)
+                if mapped:
+                    new_params[key] = f"-{mapped}" if desc else mapped
+                else:
+                    new_params[key] = value
+                continue
+
+            parts = key.split("__")
+            field = parts[0]
+            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
+
+            mapped = mapping.get(field)
+            if mapped:
+                key = f"{mapped}__{lookup}" if lookup else mapped
+                new_params[key] = value
+            else:
+                new_params[key] = value
+
+        return new_params
+
+    def filter_queryset(self, queryset):
+        """
+        Applies remapped query parameters to the queryset.
+        """
+        self.filterset_class = TicketFilter
+        mapping = self.field_maps.get(self.action, {})
+
+        if not mapping and not self.request.query_params:
+            return super().filter_queryset(queryset)
+
+        transformed_data = self._remap_params(self.request.query_params, mapping)
+
+        filterset = self.filterset_class(
+            data=transformed_data,
+            queryset=queryset,
+            request=self.request,
+        )
+        if filterset.is_valid():
+            queryset = filterset.qs
+
+        original_params = self.request._request.GET
+        try:
+            self.request._request.GET = transformed_data
+            for backend in self.filter_backends:
+                if issubclass(backend, OrderingFilter):
+                    queryset = backend().filter_queryset(self.request, queryset, self)
+        finally:
+            self.request._request.GET = original_params
+
+        return queryset
+
     def create(self, request, *args, **kwargs):
         """
         Creates a new ticket within a project and syncs it to Jira.
@@ -149,8 +234,8 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                         deadline=deadline_str,
                     )
 
-                    ticket.jira_id = jira_response.get("key")
-                    ticket.save(update_fields=["jira_id"])
+                    ticket.jira_key = jira_response.get("key")
+                    ticket.save(update_fields=["jira_key"])
 
                 if ticket.assignee:
                     send_ticket_assignment_email.delay(
@@ -463,7 +548,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 if (
                     project.jira_url
                     and user.jira_access_token
-                    and updated_ticket.jira_id
+                    and updated_ticket.jira_key
                 ):
                     jira_client = JiraClient(
                         project.jira_url, user.email, user.jira_access_token
@@ -499,7 +584,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
                     if update_kwargs:
                         jira_client.update_ticket(
-                            updated_ticket.jira_id, **update_kwargs
+                            updated_ticket.jira_key, **update_kwargs
                         )
 
         except JiraClientException as e:
@@ -552,7 +637,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                             project.jira_url, user.email, user.jira_access_token
                         )
                         jira_client.transition_ticket(
-                            ticket.jira_id, ticket.get_status_display()
+                            ticket.jira_key, ticket.get_status_display()
                         )
 
                     if ticket.status == Ticket.Status.RESOLVED:
@@ -618,14 +703,14 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 jira_url = project.jira_url
                 jira_token = user.jira_access_token
-                jira_id = ticket.jira_id
+                jira_key = ticket.jira_key
                 task_id_to_revoke = ticket.reminder_task_id
 
                 ticket.delete()
 
-                if jira_url and jira_token and jira_id:
+                if jira_url and jira_token and jira_key:
                     jira_client = JiraClient(jira_url, user.email, jira_token)
-                    jira_client.delete_ticket(jira_id)
+                    jira_client.delete_ticket(jira_key)
 
             if task_id_to_revoke:
                 current_app.control.revoke(task_id_to_revoke, terminate=True)
@@ -711,9 +796,9 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
         existing_jira_keys = set(
             Ticket.objects.filter(project=project)
-            .exclude(jira_id__isnull=True)
-            .exclude(jira_id="")
-            .values_list("jira_id", flat=True)
+            .exclude(jira_key__isnull=True)
+            .exclude(jira_key="")
+            .values_list("jira_key", flat=True)
         )
 
         local_user_account_ids = set(
@@ -729,7 +814,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             jira_id = issue.get("id")
             fields = issue.get("fields", {})
 
-            if jira_key in existing_jira_keys or jira_id in existing_jira_keys:
+            if jira_key in existing_jira_keys:
                 continue
 
             reporter_account_id = fields.get("reporter", {}).get("accountId")
@@ -762,15 +847,15 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         """
         Imports a specific ticket from Jira into the local database,
         including its full comment history.
-        Expects a payload like {"jira_id": "EX4-11"}.
+        Expects a payload like {"jira_key": "EX4-11"}.
         """
         project = get_object_or_404(Project, id=project_id)
         user = request.user
-        jira_identifier = request.data.get("jira_id")
+        jira_identifier = request.data.get("jira_key")
 
         if not jira_identifier:
             return Response(
-                {"error": "The 'jira_id' field is required in the payload."},
+                {"error": "The 'jira_key' field is required in the payload."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -791,7 +876,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 "You do not have permission to import tickets. Admin role required."
             )
 
-        if Ticket.objects.filter(project=project, jira_id=jira_identifier).exists():
+        if Ticket.objects.filter(project=project, jira_key=jira_identifier).exists():
             return Response(
                 {"error": "This ticket has already been imported."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -814,7 +899,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         fields = jira_issue.get("fields", {})
         actual_jira_key = jira_issue.get("key")
 
-        if Ticket.objects.filter(project=project, jira_id=actual_jira_key).exists():
+        if Ticket.objects.filter(project=project, jira_key=actual_jira_key).exists():
             return Response(
                 {"error": "This ticket has already been imported."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -893,7 +978,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                     status=ticket_status,
                     severity=severity,
                     deadline=deadline,
-                    jira_id=actual_jira_key,
+                    jira_key=actual_jira_key,
                 )
 
                 users_to_subscribe = {ticket.reporter}

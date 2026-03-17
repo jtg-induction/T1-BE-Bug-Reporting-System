@@ -16,6 +16,10 @@ FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
 def send_ticket_assignment_email(
     self, email, ticket_id, ticket_title, project_id, project_title
 ):
+    """
+    Sends an email notification to a user when they are assigned to a ticket.
+    Copies all active ticket subscribers on the email.
+    """
     ticket_url = f"{FRONTEND_BASE_URL}/project/{project_id}/tickets/{ticket_id}"
     subject = f"Ticket Assigned: {ticket_title}"
 
@@ -70,6 +74,10 @@ def send_ticket_assignment_email(
 
 @shared_task(bind=True, max_retries=3)
 def notify_ticket_subscribers(self, ticket_id, changes):
+    """
+    Sends an email notification to all active subscribers detailing what fields
+    changed during a ticket update.
+    """
     try:
         ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
@@ -124,15 +132,22 @@ def notify_ticket_subscribers(self, ticket_id, changes):
     </tr>
     </table>
     """
+    primary_email = emails[0]
+    cc_emails = emails[1:] if len(emails) > 1 else []
 
-    email_message = EmailMessage(subject=subject, body=html_content, cc=emails)
+    email_message = EmailMessage(
+        subject=subject, body=html_content, to=[primary_email], cc=cc_emails
+    )
     email_message.content_subtype = "html"
     email_message.send()
 
 
 @shared_task(bind=True, max_retries=3)
 def notify_reporter_resolved(self, reporter_email, ticket_title, ticket_id, project_id):
-
+    """
+    Sends an email notification to the original reporter when a ticket is marked as Resolved,
+    prompting them to verify and close it. Copies all active subscribers.
+    """
     ticket_url = f"{FRONTEND_BASE_URL}/project/{project_id}/tickets/{ticket_id}"
     subject = f"Resolved: {ticket_title}"
 
@@ -188,6 +203,10 @@ def notify_reporter_resolved(self, reporter_email, ticket_title, ticket_id, proj
 
 @shared_task(bind=True, max_retries=3)
 def send_deadline_reminder(self, ticket_id, is_two_hour=False):
+    """
+    Sends a deadline reminder email to the assignee, reporter, and subscribers.
+    Automatically schedules a follow-up 2-hour reminder if applicable.
+    """
     try:
         ticket = Ticket.objects.select_related("assignee", "reporter", "project").get(
             id=ticket_id
@@ -214,6 +233,9 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
         sub_email = sub.user.email
         if sub_email and sub_email not in to_emails and sub_email not in cc_emails:
             cc_emails.append(sub_email)
+
+    if not to_emails and cc_emails:
+        to_emails.append(cc_emails.pop(0))
 
     assignee_name = ticket.assignee.email if ticket.assignee else "Unassigned"
 
@@ -294,6 +316,9 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
 
 @shared_task(bind=True, max_retries=3)
 def notify_new_subscriber(self, ticket_id, new_subscriber_email, new_subscriber_name):
+    """
+    Sends an email to existing subscribers when a new user subscribes to the ticket.
+    """
     try:
         ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
@@ -343,9 +368,12 @@ def notify_new_subscriber(self, ticket_id, new_subscriber_email, new_subscriber_
     </table>
     """
 
-    cc_emails = notify_emails
+    primary_email = notify_emails[0]
+    cc_emails = notify_emails[1:] if len(notify_emails) > 1 else []
 
-    email_message = EmailMessage(subject=subject, body=html_content, cc=cc_emails)
+    email_message = EmailMessage(
+        subject=subject, body=html_content, to=[primary_email], cc=cc_emails
+    )
 
     email_message.content_subtype = "html"
     email_message.send()

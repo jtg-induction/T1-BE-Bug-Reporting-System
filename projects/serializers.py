@@ -28,8 +28,15 @@ class ProjectSerializer(serializers.ModelSerializer):
             "jira_project_id",
             "project_role",
             "owner",
+            "created_at",
         ]
-        read_only_fields = ["id", "jira_project_id", "project_role", "owner"]
+        read_only_fields = [
+            "id",
+            "jira_project_id",
+            "project_role",
+            "owner",
+            "created_at",
+        ]
 
     def get_project_role(self, obj):
         """
