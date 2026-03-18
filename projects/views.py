@@ -91,7 +91,7 @@ class ProjectViewSet(
                 new_key = f"{mapped}__{lookup}" if lookup else mapped
                 new_params[new_key] = value
             else:
-                new_params[new_key] = value
+                new_params[key] = value
 
         return new_params
 
@@ -268,7 +268,7 @@ class ProjectViewSet(
                     key=key,
                     name=title,
                     description=description,
-                    leadAccountId=request.user.jiraID,
+                    lead_account_id=request.user.jiraID,
                     projectId=instance.jira_project_id,
                 )
 
