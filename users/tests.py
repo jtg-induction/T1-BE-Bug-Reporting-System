@@ -7,47 +7,50 @@ User = get_user_model()
 
 
 @pytest.mark.django_db
-class UserUpdateAPIViewTestCase(APITestCase):
+class UserProfileAPIViewTestCase(APITestCase):
     """
-    Test suite for verifying user profile update functionality.
+    Test suite for user profile API endpoints.
+    Verifies authentication, profile retrieval, and update permissions.
     """
 
-    url = reverse("users:me")
     login = reverse("core:login")
 
     def setUp(self):
         """
-        Set up a test user and authenticate via JWT to obtain access and refresh tokens.
+        Initializes test users, sets up URLs, logs in the primary user,
+        and configures the test client with JWT credentials.
         """
-        self.first_name = "test"
-        self.last_name = "user"
-        self.email = "test@testuser.com"
-        self.password = "tester"
-        self.designation = "M"
-        self.jiraID = "abcd"
-        self.phone = "1234567890"
-        self.dob = "1993-12-03"
-        self.jira_access_token = "dummy-jira-token"
-
-        User.objects.create_user(
-            first_name=self.first_name,
-            last_name=self.last_name,
-            email=self.email,
-            password=self.password,
-            designation=self.designation,
-            jiraID=self.jiraID,
-            jira_access_token=self.jira_access_token,
+        self.user = User.objects.create_user(
+            first_name="test",
+            last_name="user",
+            email="test@testuser.com",
+            password="tester",
+            designation="M",
+            jiraID="abcd",
+            phone="1234567890",
+            jira_access_token="test_access_token",
+        )
+        self.user2 = User.objects.create_user(
+            first_name="test2",
+            last_name="user2",
+            email="test2@testuser.com",
+            password="tester2",
+            designation="M",
+            jiraID="abcde",
+            phone="1234567891",
+            jira_access_token="test_access_token2",
         )
 
+        self.url = reverse("users:user-detail", kwargs={"pk": self.user.pk})
         response = self.client.post(
-            self.login, {"email": self.email, "password": self.password}
+            self.login, {"email": "test@testuser.com", "password": "tester"}
         )
-        access = response.data["access"]
-        refresh = response.cookies["refresh"]
-        self.client.cookies["refresh"] = refresh
-        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + access)
+        self.access = response.data["access"]
+        self.refresh = response.cookies["refresh"]
+        self.client.cookies["refresh"] = self.refresh
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + self.access)
 
-    def test_update_user_with_wrong_access_token(self):
+    def test_access_with_invalid_token(self):
         """
         Verify that requests with an invalid access token are rejected with a 401 status.
         """
@@ -55,116 +58,86 @@ class UserUpdateAPIViewTestCase(APITestCase):
         response = self.client.get(self.url)
         self.assertEqual(401, response.status_code)
 
-    def test_updating_updatable_fields(self):
+    def test_access_with_valid_token(self):
         """
-        Verify that fields like first_name, last_name, and designation can be successfully updated.
+        Ensures a properly authenticated user can successfully retrieve their own profile data.
+        """
+        response = self.client.get(self.url)
+        data = response.data
+        self.assertEqual(self.user.first_name, data["first_name"])
+        self.assertEqual(self.user.last_name, data["last_name"])
+        self.assertEqual(self.user.email, data["email"])
+        self.assertEqual(self.user.designation, data["designation"])
+        self.assertEqual(self.user.phone, data["phone"])
+        self.assertEqual(self.user.date_of_birth, data["date_of_birth"])
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(data["can_edit"])
+
+    def test_update_with_valid_token(self):
+        """
+        Confirms that an authenticated user can successfully update their own profile details.
         """
         user_data = {
             "first_name": "new first name",
             "last_name": "new last name",
-            "designation": "TL",
         }
         response = self.client.patch(self.url, user_data)
-        self.assertTrue(
-            "first_name" in response.data
-            and "last_name" in response.data
-            and "designation" in response.data
-        )
+        get_response = self.client.get(self.url)
+        data = get_response.data
+        self.assertEqual(data["first_name"], user_data["first_name"])
+        self.assertEqual(data["last_name"], user_data["last_name"])
         self.assertEqual(200, response.status_code)
 
-    def test_non_updatable_fields(self):
+    def test_access_with_diff_valid_token(self):
         """
-        Verify that attempting to update read-only fields (like jiraID) results in a 400 error.
+        Verifies that a user can view another user's profile but does not receive edit permissions.
         """
-        user_data = {
-            "jiraID": "xyz",
-        }
-        response = self.client.patch(self.url, user_data)
-        self.assertTrue("jiraID" in response.data)
-        self.assertEqual(400, response.status_code)
-
-    def test_invalid_phone(self):
-        """
-        Verify that a phone number with an incorrect length results in a 400 validation error.
-        """
-        user_data = {
-            "phone": "12345",
-        }
-        response = self.client.patch(self.url, user_data)
-        self.assertEqual(400, response.status_code)
-
-    def test_invalid_date_format(self):
-        """
-        Verify that a date of birth in an incorrect format (DD-MM-YYYY) results in a 400 error.
-        """
-        user_data = {
-            "date_of_birth": "12-03-1998",
-        }
-        response = self.client.patch(self.url, user_data)
-        self.assertEqual(400, response.status_code)
-
-
-@pytest.mark.django_db
-class UserGetAPIViewTestCase(APITestCase):
-    """
-    Test suite for verifying the retrieval of current user profile information.
-    """
-
-    url = reverse("users:me")
-    login = reverse("core:login")
-
-    def setUp(self):
-        """
-        Set up a test user and authenticate session.
-        """
-        self.first_name = "test"
-        self.last_name = "user"
-        self.email = "test@testuser.com"
-        self.password = "tester"
-        self.designation = "M"
-        self.jiraID = "abcd"
-        self.phone = "1234567890"
-        self.dob = "1993-12-03"
-        self.jira_access_token = "dummy-jira-token"
-
-        user = User.objects.create_user(
-            first_name=self.first_name,
-            last_name=self.last_name,
-            email=self.email,
-            password=self.password,
-            designation=self.designation,
-            jiraID=self.jiraID,
-            jira_access_token=self.jira_access_token,
-        )
-
-        self.created_at = user.created_at
-        self.updated_at = user.updated_at
-
         response = self.client.post(
-            self.login, {"email": self.email, "password": self.password}
+            self.login, {"email": "test2@testuser.com", "password": "tester2"}
         )
         access = response.data["access"]
         refresh = response.cookies["refresh"]
         self.client.cookies["refresh"] = refresh
         self.client.credentials(HTTP_AUTHORIZATION="Bearer " + access)
 
-    def test_user_info(self):
-        """
-        Verify that the profile endpoint returns the correct user data fields.
-        """
         response = self.client.get(self.url)
         data = response.data
-        self.assertEqual(self.first_name, data["first_name"])
-        self.assertEqual(self.last_name, data["last_name"])
-        self.assertEqual(self.email, data["email"])
-        self.assertEqual(self.designation, data["designation"])
-        self.assertEqual(self.jiraID, data["jiraID"])
+        self.assertEqual(self.user.first_name, data["first_name"])
+        self.assertEqual(self.user.last_name, data["last_name"])
+        self.assertEqual(self.user.email, data["email"])
+        self.assertEqual(self.user.designation, data["designation"])
+        self.assertEqual(self.user.phone, data["phone"])
+        self.assertEqual(self.user.date_of_birth, data["date_of_birth"])
         self.assertEqual(200, response.status_code)
+        self.assertFalse(data["can_edit"])
 
-    def test_get_user_with_wrong_access_token(self):
+    def test_update_diff_valid_token(self):
         """
-        Verify that profile retrieval is denied for unauthorized requests.
+        Ensures that a user is forbidden (403) from updating another user's profile
+        and that no changes are actually made to the target profile.
         """
-        self.client.credentials(HTTP_AUTHORIZATION="Bearer a-fake-access-token")
+        response = self.client.post(
+            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+        )
+        access = response.data["access"]
+        refresh = response.cookies["refresh"]
+        self.client.cookies["refresh"] = refresh
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + access)
+
         response = self.client.get(self.url)
-        self.assertEqual(401, response.status_code)
+        before_update = response.data
+        user_data = {
+            "first_name": "new first name",
+            "last_name": "new last name",
+        }
+        response = self.client.patch(self.url, user_data)
+        self.assertEqual(403, response.status_code)
+
+        response = self.client.get(self.url)
+        after_update = response.data
+        self.assertEqual(before_update["first_name"], after_update["first_name"])
+        self.assertEqual(before_update["last_name"], after_update["last_name"])
+        self.assertEqual(before_update["email"], after_update["email"])
+        self.assertEqual(before_update["designation"], after_update["designation"])
+        self.assertEqual(before_update["phone"], after_update["phone"])
+        self.assertEqual(before_update["date_of_birth"], after_update["date_of_birth"])

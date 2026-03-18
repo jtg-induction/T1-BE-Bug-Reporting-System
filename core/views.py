@@ -1,11 +1,11 @@
 import os
-from urllib.parse import unquote
 from uuid import uuid4
 
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from dotenv import load_dotenv
 from rest_framework import status
-from rest_framework.exceptions import NotAuthenticated, ParseError
+from rest_framework.exceptions import ParseError
 from rest_framework.generics import CreateAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -22,6 +22,9 @@ from core.serializers import UserEmailVerifySerializer, UserRegisterSerializer
 from core.utils import send_verification_email
 
 load_dotenv()
+
+
+User = get_user_model()
 
 SECURE = os.getenv("SECURE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -117,53 +120,28 @@ class UserRegistrationAPIView(CreateAPIView):
     serializer_class = UserRegisterSerializer
     permission_classes = [AllowAny]
 
-    def post(self, request):
-        """
-        Validates the verification token and email before creating a new user instance.
-        """
-        verify_token = unquote(request.data.get("token"))
-        email = unquote(request.data.get("email"))
+    def post(self, request, *args, **kwargs):
 
-        if not verify_token:
-            return ParseError("Token not provided", status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
 
-        if not email:
-            return ParseError("Email not provided", status=status.HTTP_400_BAD_REQUEST)
-
-        emailVerified = EmailVerification.objects.filter(
-            verification_token=verify_token,
-            email=email,
-            expires_at__gte=timezone.now(),
-            isDeleted=False,
-        ).first()
-
-        if emailVerified:
-            request.data.pop("token")
-            request.data["email"] = email
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            user = serializer.save()
-            refresh = RefreshToken.for_user(user)
-
-            response = Response(
-                {"access": str(refresh.access_token)}, status=status.HTTP_201_CREATED
-            )
-            response.set_cookie(
-                key="refresh",
-                value=str(refresh),
-                httponly=True,
-                secure=SECURE,
-                samesite="Strict",
-                path="/api/",
-            )
-
-            EmailVerification.objects.filter(email=email).delete()
-
-            return response
-
-        return NotAuthenticated(
-            "Invalid Token or Token Expired", status=status.HTTP_401_UNAUTHORIZED
+        response = Response(
+            {"access": str(refresh.access_token)}, status=status.HTTP_201_CREATED
         )
+        response.set_cookie(
+            key="refresh",
+            value=str(refresh),
+            httponly=True,
+            secure=SECURE,
+            samesite="Strict",
+            path="/api/",
+        )
+
+        EmailVerification.objects.filter(email=user.email).delete()
+
+        return response
 
 
 class EmailVerifyTokenGenerateAPIView(APIView):
@@ -179,14 +157,13 @@ class EmailVerifyTokenGenerateAPIView(APIView):
         Checks for existing valid tokens or creates a new one to send via email.
         """
         email = request.data.get("email")
+
+        if User.objects.filter(email=email).exists():
+            raise ParseError("You are already registered")
+
         verify_token = EmailVerification.objects.filter(email=email).first()
 
         if verify_token:
-            if verify_token.isDeleted:
-                return ParseError(
-                    "You are already registered", status=status.HTTP_400_BAD_REQUEST
-                )
-
             if verify_token.expires_at > timezone.now():
                 return Response(
                     {"detail": "Mail already sent to your email"},

@@ -22,7 +22,7 @@ AUTH_USER_MODEL = "users.CustomUser"
 THIRD_PARTY_APPS = [
     "corsheaders",
     "rest_framework",
-    'rest_framework_simplejwt.token_blacklist'
+    "rest_framework_simplejwt.token_blacklist",
 ]
 
 LOCAL_APPS = [
@@ -44,8 +44,11 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-raw_origins = os.getenv("CORS_ALLOWED_ORIGINS")
-CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_origins.split(",") if origin]
+raw_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+
+CORS_ALLOWED_ORIGINS = [
+    origin.strip() for origin in raw_origins.split(",") if origin.strip()
+]
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -87,6 +90,11 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
+    "DEFAULT_RENDERER_CLASSES": [
+        "core.renderers.GlobalJSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardResultsSetPagination",
 }
 
 SIMPLE_JWT = {

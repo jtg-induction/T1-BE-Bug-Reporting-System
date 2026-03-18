@@ -1,5 +1,3 @@
-import uuid
-
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -17,6 +15,11 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
     """
 
     url = reverse("core:generate-email-link")
+    register = reverse("core:register")
+
+    def setUp(self):
+        self.email = "test@testuser.com"
+        self.token = EmailVerification.objects.create(email=self.email)
 
     def test_email_link_generation(self):
         """
@@ -50,57 +53,21 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
         """
         user_data = {
             "email": "test@testuser.com",
+            "first_name": "tester",
+            "last_name": "1",
+            "password": "123123",
+            "confirm_password": "123123",
+            "designation": "M",
+            "phone": "1234567890",
+            "jiraID": "abcd",
+            "jira_access_token": "test_access_token",
+            "token": self.token.verification_token,
         }
-        token = EmailVerification.objects.create(email="test@testuser.com")
-        token.isDeleted = True
-        token.save()
-        response = self.client.post(self.url, user_data)
+
+        self.client.post(self.register, user_data)
+        response = self.client.post(self.url, {"email": self.email})
         self.assertTrue("You are already registered" in response.data["detail"])
         self.assertEqual(400, response.status_code)
-
-
-@pytest.mark.django_db
-class EmailVerifyLinkAPIViewTestCase(APITestCase):
-    """
-    Tests for the token-based email verification endpoint.
-    """
-
-    url = reverse("core:verify-link")
-
-    def setUp(self):
-        """Set up initial verification data for testing."""
-        self.email = "john@snow.com"
-        self.verification = EmailVerification.objects.create(email=self.email)
-
-    def test_email_verify_link(self):
-        """
-        Test successful verification using a valid token.
-        """
-        response = self.client.post(
-            f"{self.url}?token={self.verification.verification_token}"
-        )
-        self.assertEqual(200, response.status_code)
-
-    def test_no_token(self):
-        """Test that verification fails when no token is provided in the request."""
-        response = self.client.post(self.url)
-        self.assertEqual(400, response.status_code)
-
-    def test_invalid_token(self):
-        """Test that verification fails when an incorrect UUID token is provided."""
-        response = self.client.post(f"{self.url}?token={uuid.uuid4()}")
-        self.assertEqual(401, response.status_code)
-
-    def test_email_generation_for_registered_user(self):
-        """
-        Test verification behavior when the token is marked as deleted.
-        """
-        self.verification.isDeleted = True
-        self.verification.save(update_fields=["isDeleted"])
-        response = self.client.post(
-            f"{self.url}?token={self.verification.verification_token}"
-        )
-        self.assertEqual(200, response.status_code)
 
 
 @pytest.mark.django_db
@@ -246,7 +213,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data_2)
-        self.assertEqual(401, response.status_code)
+        self.assertEqual(400, response.status_code)
 
     def test_invalid_date_format(self):
         """

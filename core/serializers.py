@@ -1,4 +1,7 @@
+from urllib.parse import unquote
+
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import serializers
 
 from core.models import EmailVerification
@@ -7,21 +10,11 @@ User = get_user_model()
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
-    """
-    Serializer for handling new user registration.
-
-    Validates email uniqueness, JiraID uniqueness, and ensures
-    password confirmation matches.
-    """
-
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
+    token = serializers.CharField(write_only=True, required=True)
 
     class Meta:
-        """
-        Metadata options for UserRegisterSerializer.
-        """
-
         model = User
         fields = [
             "id",
@@ -36,23 +29,38 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             "updated_at",
             "password",
             "confirm_password",
+            "token",
             "jira_access_token",
         ]
         read_only_fields = ["id"]
 
-    def validate(self, value):
-        """
-        Perform cross-field validation to ensure passwords match.
-        """
-        if value["password"] != value["confirm_password"]:
-            raise serializers.ValidationError("Both passwords dont match")
-        return value
+    def validate(self, attrs):
+        if attrs.get("password") != attrs.get("confirm_password"):
+            raise serializers.ValidationError(
+                {"password": "Both passwords don't match."}
+            )
+        raw_token = attrs.get("token")
+        raw_email = attrs.get("email")
+
+        verify_token = unquote(raw_token)
+        email = unquote(raw_email)
+
+        email_verified = EmailVerification.objects.filter(
+            verification_token=verify_token, email=email, expires_at__gte=timezone.now()
+        ).first()
+
+        if not email_verified:
+            raise serializers.ValidationError(
+                {"token": "Invalid Token or Token Expired"}
+            )
+
+        attrs["email"] = email
+
+        return attrs
 
     def create(self, validated_data):
-        """
-        Create and return a new User instance using the validated data.
-        """
-        validated_data.pop("confirm_password")
+        validated_data.pop("confirm_password", None)
+        validated_data.pop("token", None)
 
         user = User.objects.create_user(
             email=validated_data["email"],
@@ -63,7 +71,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             date_of_birth=validated_data.get("date_of_birth"),
             designation=validated_data["designation"],
             jiraID=validated_data["jiraID"],
-            jira_access_token=validated_data["jira_access_token"],
+            jira_access_token=validated_data.get("jira_access_token"),
         )
         return user
 

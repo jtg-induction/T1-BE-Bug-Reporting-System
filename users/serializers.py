@@ -6,11 +6,11 @@ User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
     """
-    Serializer for viewing and updating user profile information.
-
-    Restricts updates to sensitive identity fields like email and jiraID
-    while allowing modifications to personal details.
+    Serializer for handling User model instances.
+    Provides basic user details and a dynamic flag indicating if the request user can edit this profile.
     """
+
+    can_edit = serializers.SerializerMethodField()
 
     class Meta:
         """
@@ -19,15 +19,16 @@ class UserSerializer(serializers.ModelSerializer):
 
         model = User
         fields = [
+            "id",
             "first_name",
             "last_name",
             "email",
+            "phone",
             "date_of_birth",
             "designation",
-            "phone",
-            "jiraID",
+            "can_edit",
         ]
-        read_only_fields = ["email", "jiraID"]
+        read_only_fields = ["email"]
 
     def validate(self, data):
         """
@@ -45,3 +46,25 @@ class UserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(errors)
 
         return data
+
+    def get_can_edit(self, obj):
+        """
+        Evaluates whether the currently authenticated user making the request
+        has permission to edit this specific user instance.
+        """
+        request = self.context.get("request")
+        if request:
+            return obj.id == request.user.id
+
+        return False
+
+
+class CurrentUserSerializer(UserSerializer):
+    """
+    Serializer for the current logged-in user.
+    Includes Jira credentials and tokens.
+    """
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ["jiraID", "jira_access_token"]
+        extra_kwargs = {"jira_access_token": {"write_only": True}}
