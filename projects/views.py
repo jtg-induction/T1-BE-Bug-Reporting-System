@@ -668,10 +668,10 @@ class ProjectViewSet(
 
         if start_date:
             start_dt = datetime.strptime(start_date, filter_date_format)
-            base_queryset = base_queryset.filter(deadline__gte=start_dt)
+            base_queryset = base_queryset.filter(created_at__date__gte=start_dt)
         if end_date:
             end_dt = datetime.strptime(end_date, filter_date_format)
-            base_queryset = base_queryset.filter(deadline__lte=end_dt)
+            base_queryset = base_queryset.filter(created_at__date__lte=end_dt)
         if user_ids:
             base_queryset = base_queryset.filter(assignee__id__in=user_ids)
 
