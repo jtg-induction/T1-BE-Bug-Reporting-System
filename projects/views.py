@@ -693,7 +693,7 @@ class ProjectViewSet(
                 ),
             )
 
-        if not section or section == "ticket_status":
+        if not section or section == "status":
             data["ticket_status"] = base_queryset.aggregate(
                 open=Count("id", filter=Q(status=1)),
                 in_progress=Count("id", filter=Q(status=2)),
@@ -701,7 +701,7 @@ class ProjectViewSet(
                 closed=Count("id", filter=Q(status=4)),
             )
 
-        if not section or section == "ticket_severity":
+        if not section or section == "priority":
             data["ticket_severity"] = base_queryset.aggregate(
                 lowest=Count("id", filter=Q(severity=1)),
                 low=Count("id", filter=Q(severity=2)),
@@ -710,7 +710,7 @@ class ProjectViewSet(
                 highest=Count("id", filter=Q(severity=5)),
             )
 
-        if not section or section == "deadline_chart":
+        if not section or section == "deadline":
             data["deadline_chart"] = (
                 base_queryset.filter(deadline__isnull=False)
                 .annotate(day=TruncDay("deadline"))
