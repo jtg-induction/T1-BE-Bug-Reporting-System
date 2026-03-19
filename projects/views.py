@@ -1,7 +1,12 @@
 import logging
+import re
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
+from django.db.models import Count, F, Q
+from django.db.models.functions import TruncDay
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -9,12 +14,14 @@ from rest_framework.exceptions import NotFound, ParseError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.constants import history_time
 from core.tasks import send_invitation_email
 from core.utils import JiraClient, JiraClientException
 from projects.filters import ProjectFilter, ProjectMemberFilter
 from projects.models import Project, ProjectMember
 from projects.permissions import IsAdmin
 from projects.serializers import ProjectMemberSerializer, ProjectSerializer
+from tickets.models import Ticket
 from users.serializers import UserSerializer
 
 logger = logging.getLogger(__name__)
@@ -636,3 +643,92 @@ class ProjectViewSet(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=True, methods=["get"], url_path="summary")
+    def project_summary(self, request, pk=None):
+        if not ProjectMember.objects.filter(
+            project__id=pk, member=request.user
+        ).exists():
+            raise PermissionDenied("You are not a member of this Project")
+
+        query = request.query_params
+        now = timezone.now()
+        filter_date_format = "%Y-%m-%d"
+        uuid_pattern = (
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        )
+
+        base_queryset = Ticket.objects.filter(project__id=pk)
+
+        start_date = query.get("start-date")
+        end_date = query.get("end-date")
+        section = query.get("section")
+        user_ids_raw = query.get("user-ids", "")
+        user_ids = re.findall(uuid_pattern, user_ids_raw.lower())
+
+        if start_date:
+            start_dt = datetime.strptime(start_date, filter_date_format)
+            base_queryset = base_queryset.filter(deadline__gte=start_dt)
+        if end_date:
+            end_dt = datetime.strptime(end_date, filter_date_format)
+            base_queryset = base_queryset.filter(deadline__lte=end_dt)
+        if user_ids:
+            base_queryset = base_queryset.filter(assignee__id__in=user_ids)
+
+        data = {}
+
+        if not section:
+            timeline = timezone.now() - timedelta(seconds=history_time)
+            data["ticket_summary"] = base_queryset.aggregate(
+                completed=Count("id", filter=Q(status=4)),
+                missed_deadline=Count(
+                    "id", filter=Q(deadline__lt=timezone.now()) & ~Q(status=4)
+                ),
+                total=Count("id"),
+                near_deadline=Count(
+                    "id",
+                    filter=Q(
+                        deadline__gte=timezone.now(), deadline__lte=timeline
+                    ),
+                ),
+            )
+
+        if not section or section == "ticket_status":
+            data["ticket_status"] = base_queryset.aggregate(
+                open=Count("id", filter=Q(status=1)),
+                in_progress=Count("id", filter=Q(status=2)),
+                resolved=Count("id", filter=Q(status=3)),
+                closed=Count("id", filter=Q(status=4)),
+            )
+
+        if not section or section == "ticket_severity":
+            data["ticket_severity"] = base_queryset.aggregate(
+                lowest=Count("id", filter=Q(severity=1)),
+                low=Count("id", filter=Q(severity=2)),
+                medium=Count("id", filter=Q(severity=3)),
+                high=Count("id", filter=Q(severity=4)),
+                highest=Count("id", filter=Q(severity=5)),
+            )
+
+        if not section or section == "deadline_chart":
+            data["deadline_chart"] = (
+                base_queryset.filter(deadline__isnull=False)
+                .annotate(day=TruncDay("deadline"))
+                .values("day")
+                .annotate(
+                    missed=Count(
+                        "id",
+                        filter=Q(closed_at__gt=F("deadline"))
+                        | Q(closed_at__isnull=True, deadline__lt=now),
+                    ),
+                    completed_on_time=Count(
+                        "id", filter=Q(closed_at__date=F("deadline__date"))
+                    ),
+                    completed_before_time=Count(
+                        "id", filter=Q(closed_at__lt=F("deadline"))
+                    ),
+                )
+                .order_by("day")
+            )
+
+        return Response(data)
