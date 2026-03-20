@@ -14,7 +14,6 @@ from rest_framework.exceptions import NotFound, ParseError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.constants import history_time
 from core.tasks import send_invitation_email
 from core.utils import JiraClient, JiraClientException
 from projects.filters import ProjectFilter, ProjectMemberFilter
@@ -654,81 +653,102 @@ class ProjectViewSet(
         query = request.query_params
         now = timezone.now()
         filter_date_format = "%Y-%m-%d"
+
+        base_qs = Ticket.objects.filter(project__id=pk)
+
+        user_ids_raw = query.get("user-ids", "")
         uuid_pattern = (
             r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
         )
-
-        base_queryset = Ticket.objects.filter(project__id=pk)
+        user_ids = re.findall(uuid_pattern, user_ids_raw.lower())
+        if user_ids:
+            base_qs = base_qs.filter(assignee__id__in=user_ids)
 
         start_date = query.get("start-date")
         end_date = query.get("end-date")
         section = query.get("section")
-        user_ids_raw = query.get("user-ids", "")
-        user_ids = re.findall(uuid_pattern, user_ids_raw.lower())
 
-        if start_date:
-            start_dt = datetime.strptime(start_date, filter_date_format)
-            base_queryset = base_queryset.filter(created_at__date__gte=start_dt)
-        if end_date:
-            end_dt = datetime.strptime(end_date, filter_date_format)
-            base_queryset = base_queryset.filter(created_at__date__lte=end_dt)
-        if user_ids:
-            base_queryset = base_queryset.filter(assignee__id__in=user_ids)
+        if not start_date and not end_date:
+            start_dt = (now - timedelta(days=now.weekday())).date()
+            end_dt = now.date()
+        else:
+            start_dt = (
+                datetime.strptime(start_date, filter_date_format).date()
+                if start_date
+                else None
+            )
+            end_dt = (
+                datetime.strptime(end_date, filter_date_format).date()
+                if end_date
+                else None
+            )
 
         data = {}
 
-        if not section:
-            timeline = timezone.now() - timedelta(seconds=history_time)
-            data["ticket_summary"] = base_queryset.aggregate(
-                completed=Count("id", filter=Q(status=4)),
-                missed_deadline=Count(
-                    "id", filter=Q(deadline__lt=timezone.now()) & ~Q(status=4)
-                ),
-                total=Count("id"),
-                near_deadline=Count(
-                    "id",
-                    filter=Q(
-                        deadline__gte=timezone.now(), deadline__lte=timeline
-                    ),
-                ),
-            )
-
-        if not section or section == "status":
-            data["ticket_status"] = base_queryset.aggregate(
-                open=Count("id", filter=Q(status=1)),
-                in_progress=Count("id", filter=Q(status=2)),
-                resolved=Count("id", filter=Q(status=3)),
-                closed=Count("id", filter=Q(status=4)),
-            )
-
-        if not section or section == "priority":
-            data["ticket_severity"] = base_queryset.aggregate(
-                lowest=Count("id", filter=Q(severity=1)),
-                low=Count("id", filter=Q(severity=2)),
-                medium=Count("id", filter=Q(severity=3)),
-                high=Count("id", filter=Q(severity=4)),
-                highest=Count("id", filter=Q(severity=5)),
-            )
-
         if not section or section == "deadline":
+            deadline_qs = base_qs.filter(deadline__isnull=False)
+            if start_dt:
+                deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
+            if end_dt:
+                deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
+
             data["deadline_chart"] = (
-                base_queryset.filter(deadline__isnull=False)
-                .annotate(day=TruncDay("deadline"))
+                deadline_qs.annotate(day=TruncDay("deadline"))
                 .values("day")
                 .annotate(
                     missed=Count(
                         "id",
-                        filter=Q(closed_at__gt=F("deadline"))
+                        filter=Q(closed_at__date__gt=F("deadline__date"))
                         | Q(closed_at__isnull=True, deadline__lt=now),
                     ),
                     completed_on_time=Count(
                         "id", filter=Q(closed_at__date=F("deadline__date"))
                     ),
                     completed_before_time=Count(
-                        "id", filter=Q(closed_at__lt=F("deadline"))
+                        "id", filter=Q(closed_at__date__lt=F("deadline__date"))
                     ),
                 )
                 .order_by("day")
             )
+
+        if not section or section in ["status", "priority"]:
+            created_qs = base_qs
+            if start_dt:
+                created_qs = created_qs.filter(created_at__date__gte=start_dt)
+            if end_dt:
+                created_qs = created_qs.filter(created_at__date__lte=end_dt)
+
+            if not section:
+                timeline = now - timedelta(
+                    seconds=locals().get("history_time", 86400)
+                )
+                data["ticket_summary"] = created_qs.aggregate(
+                    completed=Count("id", filter=Q(status=4)),
+                    missed_deadline=Count(
+                        "id", filter=Q(deadline__lt=now) & ~Q(status=4)
+                    ),
+                    total=Count("id"),
+                    near_deadline=Count(
+                        "id",
+                        filter=Q(deadline__gte=now, deadline__lte=timeline),
+                    ),
+                )
+
+            if not section or section == "status":
+                data["ticket_status"] = created_qs.aggregate(
+                    open=Count("id", filter=Q(status=1)),
+                    in_progress=Count("id", filter=Q(status=2)),
+                    resolved=Count("id", filter=Q(status=3)),
+                    closed=Count("id", filter=Q(status=4)),
+                )
+
+            if not section or section == "priority":
+                data["ticket_severity"] = created_qs.aggregate(
+                    lowest=Count("id", filter=Q(severity=1)),
+                    low=Count("id", filter=Q(severity=2)),
+                    medium=Count("id", filter=Q(severity=3)),
+                    high=Count("id", filter=Q(severity=4)),
+                    highest=Count("id", filter=Q(severity=5)),
+                )
 
         return Response(data)
