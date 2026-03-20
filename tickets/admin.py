@@ -12,12 +12,12 @@ class TicketAdmin(admin.ModelAdmin):
         "reporter",
         "isDeleted",
     )
-    search_fields = ("title", "status", "assignee")
+    search_fields = ("title", "status", "assignee__email", "reporter__email")
 
 
 class TicketSubscriberAdmin(admin.ModelAdmin):
     list_display = ("user", "ticket", "status", "isDeleted")
-    search_fields = ("role", "status")
+    search_fields = ("user__email", "ticket__title", "status")
 
 
 admin.site.register(Ticket, TicketAdmin)

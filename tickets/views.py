@@ -4,7 +4,6 @@ from celery import current_app
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
-from django.http import QueryDict
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -19,7 +18,7 @@ from comments.models import Comment
 from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
-from tickets.filters import TicketFilter
+from tickets.filters import TicketFilterMixin
 from tickets.models import Ticket, TicketSubscriber
 from tickets.serializers import (
     TicketListSerializer,
@@ -37,7 +36,9 @@ from tickets.tasks import (
 User = get_user_model()
 
 
-class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class UserTicketViewSet(
+    mixins.ListModelMixin, viewsets.GenericViewSet, TicketFilterMixin
+):
     """
     ViewSet for listing tickets associated with the authenticated user.
     """
@@ -82,70 +83,8 @@ class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         }
     }
 
-    def _remap_params(self, query_params, mapping):
-        """
-        Transforms API-facing keys into internal database-facing keys.
-        Handles both standard filters (field__lookup) and the 'ordering' key.
-        """
-        new_params = QueryDict(mutable=True)
 
-        for key, value in query_params.items():
-            if key == "ordering":
-                desc = value.startswith("-")
-                field = value.lstrip("-")
-                mapped = mapping.get(field)
-                if mapped:
-                    new_params[key] = f"-{mapped}" if desc else mapped
-                else:
-                    new_params[key] = value
-                continue
-
-            parts = key.split("__")
-            field = parts[0]
-            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
-
-            mapped = mapping.get(field)
-            if mapped:
-                key = f"{mapped}__{lookup}" if lookup else mapped
-                new_params[key] = value
-            else:
-                new_params[key] = value
-
-        return new_params
-
-    def filter_queryset(self, queryset):
-        """
-        Applies remapped query parameters to the queryset.
-        """
-        self.filterset_class = TicketFilter
-        mapping = self.field_maps.get(self.action, {})
-
-        if not mapping and not self.request.query_params:
-            return super().filter_queryset(queryset)
-
-        transformed_data = self._remap_params(self.request.query_params, mapping)
-
-        filterset = self.filterset_class(
-            data=transformed_data,
-            queryset=queryset,
-            request=self.request,
-        )
-        if filterset.is_valid():
-            queryset = filterset.qs
-
-        original_params = self.request._request.GET
-        try:
-            self.request._request.GET = transformed_data
-            for backend in self.filter_backends:
-                if issubclass(backend, OrderingFilter):
-                    queryset = backend().filter_queryset(self.request, queryset, self)
-        finally:
-            self.request._request.GET = original_params
-
-        return queryset
-
-
-class ProjectTicketViewSet(viewsets.ModelViewSet):
+class ProjectTicketViewSet(viewsets.ModelViewSet, TicketFilterMixin):
     """
     ViewSet for managing tickets within a specific project context.
     Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .
@@ -192,68 +131,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         }
     }
 
-    def _remap_params(self, query_params, mapping):
-        """
-        Transforms API-facing keys into internal database-facing keys.
-        Handles both standard filters (field__lookup) and the 'ordering' key.
-        """
-        new_params = QueryDict(mutable=True)
-
-        for key, value in query_params.items():
-            if key == "ordering":
-                desc = value.startswith("-")
-                field = value.lstrip("-")
-                mapped = mapping.get(field)
-                if mapped:
-                    new_params[key] = f"-{mapped}" if desc else mapped
-                else:
-                    new_params[key] = value
-                continue
-
-            parts = key.split("__")
-            field = parts[0]
-            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
-
-            mapped = mapping.get(field)
-            if mapped:
-                key = f"{mapped}__{lookup}" if lookup else mapped
-                new_params[key] = value
-            else:
-                new_params[key] = value
-
-        return new_params
-
-    def filter_queryset(self, queryset):
-        """
-        Applies remapped query parameters to the queryset.
-        """
-        self.filterset_class = TicketFilter
-        mapping = self.field_maps.get(self.action, {})
-
-        if not mapping and not self.request.query_params:
-            return super().filter_queryset(queryset)
-
-        transformed_data = self._remap_params(self.request.query_params, mapping)
-
-        filterset = self.filterset_class(
-            data=transformed_data,
-            queryset=queryset,
-            request=self.request,
-        )
-        if filterset.is_valid():
-            queryset = filterset.qs
-
-        original_params = self.request._request.GET
-        try:
-            self.request._request.GET = transformed_data
-            for backend in self.filter_backends:
-                if issubclass(backend, OrderingFilter):
-                    queryset = backend().filter_queryset(self.request, queryset, self)
-        finally:
-            self.request._request.GET = original_params
-
-        return queryset
-
     def create(self, request, *args, **kwargs):
         """
         Creates a new ticket within a project and syncs it to Jira.
@@ -263,7 +140,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         project = get_object_or_404(Project, id=project_id)
         user = request.user
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot add tickets to an inactive project."}
             )
@@ -349,14 +226,14 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
 
                     if one_day_before > now:
                         task = send_deadline_reminder.apply_async(
-                            args=[ticket.id], eta=one_day_before
+                            args=[str(ticket.id)], eta=one_day_before
                         )
                         ticket.reminder_task_id = task.id
                         ticket.save(update_fields=["reminder_task_id"])
 
                     elif two_hours_before > now:
                         task = send_deadline_reminder.apply_async(
-                            args=[ticket.id],
+                            args=[str(ticket.id)],
                             kwargs={"is_two_hour": True},
                             eta=two_hours_before,
                         )
@@ -429,10 +306,222 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    def _get_ticket_state(self, ticket):
+        """Helper to snapshot human-readable ticket state for notifications."""
+
+        def get_safe_str(val, is_long=False):
+            if not val:
+                return "None"
+            s = str(val)
+            return s[:97] + "..." if is_long and len(s) > 100 else s
+
+        return {
+            "Title": ticket.title,
+            "Description": get_safe_str(ticket.description, True),
+            "Severity": ticket.get_severity_display() if ticket.severity else "None",
+            "Deadline": ticket.deadline.strftime("%Y-%m-%d")
+            if ticket.deadline
+            else "None",
+            "Assignee": ticket.assignee.email if ticket.assignee else "Unassigned",
+            "Status": ticket.get_status_display(),
+        }
+
+    def _handle_project_move(
+        self, request, ticket, old_project, new_project_id, user, is_admin
+    ):
+        """Handles moving a ticket to a new project and cleaning up subscribers/assignees."""
+        if not is_admin:
+            raise PermissionDenied("Only admins can move tickets to a new project.")
+
+        new_project = get_object_or_404(Project, id=new_project_id, status=1)
+
+        is_new_admin = ProjectMember.objects.filter(
+            project=new_project,
+            member=user,
+            role=ProjectMember.Role.ADMIN,
+            status=ProjectMember.Status.ACTIVE,
+        ).exists()
+
+        if not is_new_admin:
+            raise PermissionDenied("Admin role required in the destination project.")
+
+        new_member_ids = ProjectMember.objects.filter(
+            project=new_project, status=ProjectMember.Status.ACTIVE
+        ).values_list("member_id", flat=True)
+
+        unassign = (
+            ticket.assignee_id is not None and ticket.assignee_id not in new_member_ids
+        )
+
+        try:
+            with transaction.atomic():
+                ticket.project = new_project
+                update_fields = ["project"]
+                if unassign:
+                    ticket.assignee = None
+                    update_fields.append("assignee")
+
+                ticket.save(update_fields=update_fields)
+
+                TicketSubscriber.objects.filter(ticket=ticket).exclude(
+                    user_id__in=new_member_ids
+                ).delete()
+
+            notify_ticket_subscribers.delay(
+                ticket_id=str(ticket.id),
+                changes=[
+                    {
+                        "field": "Project",
+                        "old": old_project.title,
+                        "new": new_project.title,
+                    }
+                ],
+            )
+
+            read_serializer = TicketReadSerializer(ticket, context={"request": request})
+            return Response(read_serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {"error": f"Move failed: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    def _update_deadline_reminder(self, ticket, old_task_id):
+        """Revokes the old reminder task and queues a new one based on the updated deadline."""
+        if old_task_id:
+            current_app.control.revoke(old_task_id, terminate=True)
+
+        if not ticket.deadline:
+            return
+
+        now = timezone.now()
+        one_day_before = ticket.deadline - timedelta(days=1)
+        two_hours_before = ticket.deadline - timedelta(hours=2)
+
+        target_eta, is_2h = None, False
+        if one_day_before > now:
+            target_eta = one_day_before
+        elif two_hours_before > now:
+            target_eta, is_2h = two_hours_before, True
+
+        if target_eta:
+            task = send_deadline_reminder.apply_async(
+                args=[str(ticket.id)], kwargs={"is_two_hour": is_2h}, eta=target_eta
+            )
+            ticket.reminder_task_id = task.id
+            ticket.save(update_fields=["reminder_task_id"])
+
+    def _sync_to_jira(self, project, user, ticket, request_data):
+        """Updates general fields in the connected Jira instance."""
+        if not (project.jira_url and user.jira_access_token and ticket.jira_key):
+            return
+
+        jira_client = JiraClient(project.jira_url, user.email, user.jira_access_token)
+        update_kwargs = {}
+
+        if "title" in request_data:
+            update_kwargs["title"] = ticket.title
+        if "description" in request_data:
+            update_kwargs["description"] = ticket.description
+        if "severity" in request_data:
+            update_kwargs["severity"] = ticket.get_severity_display()
+
+        if "assignee" in request_data:
+            if ticket.assignee and hasattr(ticket.assignee, "jiraID"):
+                update_kwargs["assignee_id"] = ticket.assignee.jiraID
+            else:
+                update_kwargs["clear_assignee"] = True
+
+        if "deadline" in request_data:
+            if ticket.deadline:
+                update_kwargs["deadline"] = ticket.deadline.strftime("%Y-%m-%d")
+            else:
+                update_kwargs["clear_deadline"] = True
+
+        if update_kwargs:
+            jira_client.update_ticket(ticket.jira_key, **update_kwargs)
+
+    def _handle_status_change(
+        self, request, ticket, project, user, new_status_val, original_state, changes
+    ):
+        """
+        Processes status changes, triggers Jira transitions, and handles Jira rejections gracefully.
+        Returns a tuple: (Optional Response on error, Updated changes list)
+        """
+        try:
+            with transaction.atomic():
+                ticket.prev_status = ticket.status
+                ticket.status = int(new_status_val)
+                ticket.status_updated_at = timezone.now()
+                ticket.updated_by = user
+                ticket.status_updated_by = user
+
+                if ticket.status == Ticket.Status.CLOSED:
+                    ticket.closed_at = timezone.now()
+
+                ticket.save()
+
+                new_status_display = dict(Ticket.Status.choices).get(
+                    ticket.status, "Unknown"
+                )
+                changes.append(
+                    {
+                        "field": "Status",
+                        "old": original_state["Status"],
+                        "new": new_status_display,
+                    }
+                )
+
+                skip_jira_transition = (
+                    ticket.prev_status == Ticket.Status.IN_PROGRESS
+                    and ticket.status == Ticket.Status.RESOLVED
+                ) or (
+                    ticket.prev_status == Ticket.Status.RESOLVED
+                    and ticket.status == Ticket.Status.IN_PROGRESS
+                )
+
+                if (
+                    project.jira_url
+                    and user.jira_access_token
+                    and ticket.jira_key
+                    and not skip_jira_transition
+                ):
+                    jira_client = JiraClient(
+                        project.jira_url, user.email, user.jira_access_token
+                    )
+                    jira_client.transition_ticket(
+                        ticket.jira_key, ticket.get_status_display()
+                    )
+
+                if ticket.status == Ticket.Status.RESOLVED:
+                    notify_reporter_resolved.delay(
+                        reporter_email=ticket.reporter.email,
+                        ticket_title=ticket.title,
+                        ticket_id=str(ticket.id),
+                        project_id=str(project.id),
+                    )
+            return None, changes
+
+        except Exception as e:
+            changes = [c for c in changes if c["field"] != "Status"]
+            if changes:
+                notify_ticket_subscribers.delay(
+                    ticket_id=str(ticket.id), changes=changes
+                )
+
+            read_serializer = TicketReadSerializer(ticket, context={"request": request})
+            return Response(
+                {
+                    "data": read_serializer.data,
+                    "message": f"Details saved, but Jira status sync failed: {str(e)}",
+                },
+                status=status.HTTP_200_OK,
+            ), changes
+
     def update(self, request, *args, **kwargs):
         """
         Updates an existing ticket. Includes handling for moving tickets between projects,
-        syncing updates with Jira, and re-evaluating deadline reminders.
+        syncing updates with Jira.
         """
         ticket = self.get_object()
         project = ticket.project
@@ -442,7 +531,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         if "deadline" in data and data["deadline"] == "":
             data["deadline"] = None
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot update tickets in an inactive project."}
             )
@@ -457,71 +546,10 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         ).exists()
 
         new_project_id = data.pop("project_id", None)
-
         if new_project_id and str(new_project_id) != str(project.id):
-            if not is_admin:
-                raise PermissionDenied("Only admins can move tickets to a new project.")
-
-            new_project = get_object_or_404(Project, id=new_project_id, status=1)
-
-            is_new_admin = ProjectMember.objects.filter(
-                project=new_project,
-                member=user,
-                role=ProjectMember.Role.ADMIN,
-                status=ProjectMember.Status.ACTIVE,
-            ).exists()
-
-            if not is_new_admin:
-                raise PermissionDenied(
-                    "Admin role required in the destination project."
-                )
-
-            new_member_ids = ProjectMember.objects.filter(
-                project=new_project, status=ProjectMember.Status.ACTIVE
-            ).values_list("member_id", flat=True)
-
-            unassign = False
-            if (
-                ticket.assignee_id is not None
-                and ticket.assignee_id not in new_member_ids
-            ):
-                ticket.assignee = None
-                unassign = True
-
-            try:
-                with transaction.atomic():
-                    ticket.project = new_project
-                    update_fields = ["project"]
-                    if unassign:
-                        update_fields.append("assignee")
-
-                    ticket.save(update_fields=update_fields)
-
-                    TicketSubscriber.objects.filter(ticket=ticket).exclude(
-                        user_id__in=new_member_ids
-                    ).delete()
-
-                notify_ticket_subscribers.delay(
-                    ticket_id=str(ticket.id),
-                    changes=[
-                        {
-                            "field": "Project",
-                            "old": project.title,
-                            "new": new_project.title,
-                        }
-                    ],
-                )
-
-                read_serializer = TicketReadSerializer(
-                    ticket, context={"request": request}
-                )
-                return Response(read_serializer.data, status=status.HTTP_200_OK)
-
-            except Exception as e:
-                return Response(
-                    {"error": f"Move failed: {str(e)}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            return self._handle_project_move(
+                request, ticket, project, new_project_id, user, is_admin
+            )
 
         if not (is_reporter or is_assignee or is_admin):
             raise PermissionDenied("You do not have permission to edit this ticket.")
@@ -544,24 +572,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         general_data.pop("status", None)
 
         old_task_id = ticket.reminder_task_id
-
-        def get_safe_str(val, is_long=False):
-            if not val:
-                return "None"
-            s = str(val)
-            return s[:97] + "..." if is_long and len(s) > 100 else s
-
-        original_state = {
-            "Title": ticket.title,
-            "Description": get_safe_str(ticket.description, True),
-            "Severity": ticket.get_severity_display() if ticket.severity else "None",
-            "Deadline": ticket.deadline.strftime("%Y-%m-%d")
-            if ticket.deadline
-            else "None",
-            "Assignee": ticket.assignee.email if ticket.assignee else "Unassigned",
-            "Status": ticket.get_status_display(),
-        }
-
+        original_state = self._get_ticket_state(ticket)
         changes = []
 
         try:
@@ -572,20 +583,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 serializer.is_valid(raise_exception=True)
                 updated_ticket = serializer.save(updated_by=user)
 
-                updated_state = {
-                    "Title": updated_ticket.title,
-                    "Description": get_safe_str(updated_ticket.description, True),
-                    "Severity": updated_ticket.get_severity_display()
-                    if updated_ticket.severity
-                    else "None",
-                    "Deadline": updated_ticket.deadline.strftime("%Y-%m-%d")
-                    if updated_ticket.deadline
-                    else "None",
-                    "Assignee": updated_ticket.assignee.email
-                    if updated_ticket.assignee
-                    else "Unassigned",
-                }
-
+                updated_state = self._get_ticket_state(updated_ticket)
                 for field in [
                     "Title",
                     "Description",
@@ -603,70 +601,9 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                         )
 
                 if "deadline" in general_data:
-                    if old_task_id:
-                        current_app.control.revoke(old_task_id, terminate=True)
+                    self._update_deadline_reminder(updated_ticket, old_task_id)
 
-                    if updated_ticket.deadline:
-                        now = timezone.now()
-                        one_day_before = updated_ticket.deadline - timedelta(days=1)
-                        two_hours_before = updated_ticket.deadline - timedelta(hours=2)
-
-                        target_eta, is_2h = None, False
-                        if one_day_before > now:
-                            target_eta = one_day_before
-                        elif two_hours_before > now:
-                            target_eta, is_2h = two_hours_before, True
-
-                        if target_eta:
-                            task = send_deadline_reminder.apply_async(
-                                args=[updated_ticket.id],
-                                kwargs={"is_two_hour": is_2h},
-                                eta=target_eta,
-                            )
-                            updated_ticket.reminder_task_id = task.id
-                            updated_ticket.save(update_fields=["reminder_task_id"])
-
-                if (
-                    project.jira_url
-                    and user.jira_access_token
-                    and updated_ticket.jira_key
-                ):
-                    jira_client = JiraClient(
-                        project.jira_url, user.email, user.jira_access_token
-                    )
-
-                    update_kwargs = {}
-                    if "title" in data:
-                        update_kwargs["title"] = updated_ticket.title
-                    if "description" in data:
-                        update_kwargs["description"] = updated_ticket.description
-                    if "severity" in data:
-                        update_kwargs["severity"] = (
-                            updated_ticket.get_severity_display()
-                        )
-
-                    if "assignee" in data:
-                        if updated_ticket.assignee and hasattr(
-                            updated_ticket.assignee, "jiraID"
-                        ):
-                            update_kwargs["assignee_id"] = (
-                                updated_ticket.assignee.jiraID
-                            )
-                        else:
-                            update_kwargs["clear_assignee"] = True
-
-                    if "deadline" in data:
-                        if updated_ticket.deadline:
-                            update_kwargs["deadline"] = (
-                                updated_ticket.deadline.strftime("%Y-%m-%d")
-                            )
-                        else:
-                            update_kwargs["clear_deadline"] = True
-
-                    if update_kwargs:
-                        jira_client.update_ticket(
-                            updated_ticket.jira_key, **update_kwargs
-                        )
+                self._sync_to_jira(project, user, updated_ticket, data)
 
         except JiraClientException as e:
             return Response(
@@ -683,70 +620,11 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             )
 
         if status_changed:
-            try:
-                with transaction.atomic():
-                    ticket.prev_status = ticket.status
-                    ticket.status = int(new_status_val)
-                    ticket.status_updated_at = timezone.now()
-                    ticket.updated_by = user
-                    ticket.status_updated_by = user
-                    if ticket.status == Ticket.Status.CLOSED:
-                        ticket.closed_at = timezone.now()
-                    ticket.save()
-
-                    new_status_display = dict(Ticket.Status.choices).get(
-                        ticket.status, "Unknown"
-                    )
-                    changes.append(
-                        {
-                            "field": "Status",
-                            "old": original_state["Status"],
-                            "new": new_status_display,
-                        }
-                    )
-
-                    skip_jira_transition = (
-                        ticket.prev_status == Ticket.Status.IN_PROGRESS
-                        and ticket.status == Ticket.Status.RESOLVED
-                    ) or (
-                        ticket.prev_status == Ticket.Status.RESOLVED
-                        and ticket.status == Ticket.Status.IN_PROGRESS
-                    )
-
-                    if not skip_jira_transition:
-                        jira_client = JiraClient(
-                            project.jira_url, user.email, user.jira_access_token
-                        )
-                        jira_client.transition_ticket(
-                            ticket.jira_key, ticket.get_status_display()
-                        )
-
-                    if ticket.status == Ticket.Status.RESOLVED:
-                        notify_reporter_resolved.delay(
-                            reporter_email=ticket.reporter.email,
-                            ticket_title=ticket.title,
-                            ticket_id=str(ticket.id),
-                            project_id=str(project.id),
-                        )
-
-            except Exception as e:
-                read_serializer = TicketReadSerializer(
-                    ticket, context={"request": request}
-                )
-
-                changes = [c for c in changes if c["field"] != "Status"]
-                if changes:
-                    notify_ticket_subscribers.delay(
-                        ticket_id=str(ticket.id), changes=changes
-                    )
-
-                return Response(
-                    {
-                        "data": read_serializer.data,
-                        "message": f"Details saved, but Jira status sync failed: {str(e)}",
-                    },
-                    status=status.HTTP_200_OK,
-                )
+            status_response, changes = self._handle_status_change(
+                request, ticket, project, user, new_status_val, original_state, changes
+            )
+            if status_response:
+                return status_response
 
         if changes:
             notify_ticket_subscribers.delay(ticket_id=str(ticket.id), changes=changes)
@@ -763,7 +641,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot delete tickets in an inactive project."}
             )
@@ -845,7 +723,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         user = request.user
         jql = request.data.get("jql", None)
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot import tickets from an inactive project."}
             )
@@ -940,7 +818,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot import tickets into an inactive project."}
             )
@@ -1076,45 +954,60 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 ]
                 TicketSubscriber.objects.bulk_create(subscriptions)
 
-                jira_comments_data = fields.get("comment", {}).get("comments", [])
-                comments_to_create = []
+                try:
+                    comments_response = jira_client.get_ticket_comments(actual_jira_key)
+                    jira_comments_data = comments_response.get("comments", [])
 
-                if jira_comments_data:
-                    first_comment = jira_comments_data[0]
+                    comments_to_create = []
 
-                    c_jira_id = first_comment.get("id")
-                    c_author_dict = first_comment.get("author", {})
-                    c_author_account_id = c_author_dict.get("accountId")
-                    c_author_display_name = c_author_dict.get(
-                        "displayName", "Unknown Jira User"
-                    )
+                    for jira_comment in jira_comments_data:
+                        if "parentId" in jira_comment:
+                            continue
+                        c_jira_id = jira_comment.get("id")
 
-                    c_author_user = None
-                    if c_author_account_id:
-                        c_author_user = User.objects.filter(
-                            jiraID=c_author_account_id
-                        ).first()
-
-                    c_body_raw = first_comment.get("body")
-                    c_body_md = (
-                        JiraClient.adf_to_markdown(c_body_raw) if c_body_raw else ""
-                    )
-
-                    comments_to_create.append(
-                        Comment(
-                            ticket=ticket,
-                            description=c_body_md,
-                            author=c_author_user,
-                            author_name=c_author_display_name,
-                            jira_id=c_jira_id,
+                        c_author_dict = jira_comment.get("author", {})
+                        c_author_account_id = c_author_dict.get("accountId")
+                        c_author_display_name = c_author_dict.get(
+                            "displayName", "Unknown Jira User"
                         )
+
+                        c_author_user = None
+                        if c_author_account_id:
+                            c_author_user = User.objects.filter(
+                                jiraID=c_author_account_id
+                            ).first()
+
+                        c_body_raw = jira_comment.get("body")
+                        c_body_md = (
+                            JiraClient.adf_to_markdown(c_body_raw) if c_body_raw else ""
+                        )
+
+                        comments_to_create.append(
+                            Comment(
+                                ticket=ticket,
+                                description=c_body_md,
+                                author=c_author_user,
+                                author_name=c_author_display_name,
+                                jira_id=c_jira_id,
+                            )
+                        )
+
+                    if comments_to_create:
+                        Comment.objects.bulk_create(comments_to_create)
+
+                except Exception as e:
+                    return Response(
+                        {
+                            "error": "Failed to save the imported comments.",
+                            "details": str(e),
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-                if comments_to_create:
-                    Comment.objects.bulk_create(comments_to_create)
-
-            read_serializer = TicketReadSerializer(ticket, context={"request": request})
-            return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+                read_serializer = TicketReadSerializer(
+                    ticket, context={"request": request}
+                )
+                return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response(

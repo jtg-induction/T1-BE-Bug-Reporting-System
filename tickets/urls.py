@@ -7,7 +7,7 @@ router = DefaultRouter()
 router.register(r"tickets", UserTicketViewSet, basename="user-tickets")
 
 router.register(
-    r"projects/(?P<project_id>[0-9a-f-]+)/tickets",
+    r"projects/(?P<project_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/tickets",
     ProjectTicketViewSet,
     basename="project-tickets",
 )

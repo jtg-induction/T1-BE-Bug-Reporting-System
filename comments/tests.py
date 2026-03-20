@@ -79,7 +79,7 @@ class CommentViewSetTestCase(APITestCase):
             reporter=self.user1,
             title="Test Ticket",
             description="Ticket Description",
-            jira_id="PROJ1-123",
+            jira_key="PROJ1-123",
             status=Ticket.Status.OPEN,
         )
 
@@ -188,11 +188,10 @@ class CommentViewSetTestCase(APITestCase):
         )
         my_detail_url = f"{self.list_url}{my_comment.id}/"
 
-        from requests.models import Response
-
-        mock_resp = Response()
+        mock_resp = MagicMock()
         mock_resp.status_code = 204
-        mock_resp._content = b""
+        mock_resp.text = ""
+        mock_resp.json.return_value = {}
         mock_request.return_value = mock_resp
 
         response = self.client.delete(my_detail_url)

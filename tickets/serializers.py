@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from projects.models import ProjectMember
+from projects.models import Project, ProjectMember
 from tickets.models import Ticket, TicketSubscriber
 
 
@@ -11,7 +11,7 @@ class TicketListSerializer(serializers.ModelSerializer):
     the requesting user's subscription status.
     """
 
-    assignee = serializers.EmailField(source="assignee.email", read_only=True)
+    assignee = serializers.SerializerMethodField()
     reporter = serializers.EmailField(source="reporter.email", read_only=True)
     project = serializers.CharField(source="project.key", read_only=True)
     project_id = serializers.UUIDField(source="project.id", read_only=True)
@@ -44,12 +44,16 @@ class TicketListSerializer(serializers.ModelSerializer):
         Retrieves the subscription status of the currently authenticated user making the request.
         """
         request = self.context.get("request")
-        if not request or not request.user:
+        if not request:
             return False
 
         return TicketSubscriber.objects.filter(
             ticket=obj, user=request.user, status=TicketSubscriber.Status.SUBSCRIBED
         ).exists()
+
+    def get_assignee(self, obj):
+        """Returns the assignee's email if assignee exists."""
+        return obj.assignee.email if obj.assignee else None
 
 
 class TicketReadSerializer(TicketListSerializer):
@@ -82,7 +86,7 @@ class TicketReadSerializer(TicketListSerializer):
         Hierarchy: 4 (Reporter) > 3 (Admin) > 2 (Assignee) > 1 (Normal Dev)
         """
         request = self.context.get("request")
-        if not request or not hasattr(request, "user"):
+        if not request:
             return 1
 
         user = request.user
@@ -109,7 +113,7 @@ class TicketReadSerializer(TicketListSerializer):
         """
         Evaluates whether the ticket's parent project is currently active.
         """
-        return obj.project.status == 1
+        return obj.project.status == Project.Status.ACTIVE
 
 
 class TicketWriteSerializer(serializers.ModelSerializer):

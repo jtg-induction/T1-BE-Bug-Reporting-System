@@ -8,14 +8,13 @@ from rest_framework.response import Response
 from comments.models import Comment
 from comments.serializers import CommentSerializer
 from core.utils import JiraClient, JiraClientException
-from projects.models import ProjectMember
+from projects.models import Project, ProjectMember
 from tickets.models import Ticket
 
 
 class CommentViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing comments on a specific ticket.
-    Assumes routing includes the ticket ID, e.g., /api/tickets/<ticket_id>/comments/
     """
 
     serializer_class = CommentSerializer
@@ -26,7 +25,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         Retrieves comments strictly for the ticket specified in the URL.
         """
         ticket_id = self.kwargs.get("ticket_id")
-        return Comment.objects.filter(ticket_id=ticket_id).select_related("author")
+        project_id = self.kwargs.get("project_id")
+        return Comment.objects.filter(
+            ticket_id=ticket_id,
+            ticket__project_id=project_id,
+        ).select_related("author")
 
     def _check_project_access(self, ticket, user):
         """
@@ -44,13 +47,16 @@ class CommentViewSet(viewsets.ModelViewSet):
         Creates a local comment and syncs it to the associated Jira issue.
         """
         ticket_id = self.kwargs.get("ticket_id")
+        project_id = self.kwargs.get("project_id")
         ticket = get_object_or_404(
-            Ticket.objects.select_related("project"), id=ticket_id
+            Ticket.objects.select_related("project"),
+            id=ticket_id,
+            project_id=project_id,
         )
         user = request.user
         project = ticket.project
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot add comments to an inactive project."}
             )
@@ -70,13 +76,13 @@ class CommentViewSet(viewsets.ModelViewSet):
                     ticket=ticket, author=user, author_name=display_name
                 )
 
-                if project.jira_url and user.jira_access_token and ticket.jira_id:
+                if project.jira_url and user.jira_access_token and ticket.jira_key:
                     jira_client = JiraClient(
                         project.jira_url, user.email, user.jira_access_token
                     )
 
                     jira_response = jira_client.add_comment(
-                        jira_issue_id=ticket.jira_id, text=comment.description
+                        jira_issue_key=ticket.jira_key, text=comment.description
                     )
 
                     comment.jira_id = jira_response.get("id")
@@ -112,10 +118,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot edit comments in an inactive project."}
             )
+        self._check_project_access(ticket, user)
 
         if comment.author != user:
             raise PermissionDenied("You can only edit your own comments.")
@@ -132,7 +139,7 @@ class CommentViewSet(viewsets.ModelViewSet):
                 if (
                     project.jira_url
                     and user.jira_access_token
-                    and ticket.jira_id
+                    and ticket.jira_key
                     and updated_comment.jira_id
                 ):
                     jira_client = JiraClient(
@@ -140,7 +147,7 @@ class CommentViewSet(viewsets.ModelViewSet):
                     )
 
                     jira_client.update_comment(
-                        jira_issue_id=ticket.jira_id,
+                        jira_issue_key=ticket.jira_key,
                         jira_comment_id=updated_comment.jira_id,
                         text=updated_comment.description,
                     )
@@ -174,10 +181,12 @@ class CommentViewSet(viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != 1:
+        if project.status != Project.Status.ACTIVE:
             raise ValidationError(
                 {"project": "Cannot delete comments in an inactive project."}
             )
+
+        self._check_project_access(ticket, user)
 
         if comment.author != user:
             raise PermissionDenied(
@@ -191,7 +200,7 @@ class CommentViewSet(viewsets.ModelViewSet):
                 if (
                     project.jira_url
                     and user.jira_access_token
-                    and ticket.jira_id
+                    and ticket.jira_key
                     and comment.jira_id
                 ):
                     jira_client = JiraClient(
@@ -199,7 +208,7 @@ class CommentViewSet(viewsets.ModelViewSet):
                     )
 
                     jira_client.delete_comment(
-                        jira_issue_id=ticket.jira_id, jira_comment_id=comment.jira_id
+                        jira_issue_key=ticket.jira_key, jira_comment_id=comment.jira_id
                     )
 
             return Response(status=status.HTTP_204_NO_CONTENT)

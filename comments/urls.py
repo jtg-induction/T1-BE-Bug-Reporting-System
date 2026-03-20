@@ -6,7 +6,7 @@ from .views import CommentViewSet
 router = DefaultRouter()
 
 router.register(
-    r"projects/(?P<project_id>[0-9a-f-]+)/tickets/(?P<ticket_id>[0-9a-f-]+)/comments",
+    r"projects/(?P<project_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/tickets/(?P<ticket_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/comments",
     CommentViewSet,
     basename="ticket-comments",
 )

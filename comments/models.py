@@ -28,10 +28,11 @@ class Comment(BaseModel):
 
     author_name = models.CharField(max_length=100, blank=True)
 
-    jira_id = models.CharField(max_length=255, null=True, blank=True)
+    jira_id = models.CharField(max_length=255)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Comment by {self.author_name} on Ticket {self.ticket.title}"
+        author = self.author_name or "Unknown"
+        return f"Comment by {author} on Ticket {self.ticket.title}"

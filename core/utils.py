@@ -106,7 +106,9 @@ class JiraClient:
             return response_data
 
         except requests.exceptions.RequestException as e:
-            raise JiraClientException(f"Network error while contacting Jira: {str(e)}")
+            raise JiraClientException(
+                f"Network error while contacting Jira: {e}"
+            ) from e
 
     @staticmethod
     def markdown_to_adf(text):
@@ -558,7 +560,15 @@ class JiraClient:
         endpoint = f"/rest/api/3/issue/{jira_id_or_key}"
         return self._request("GET", endpoint)
 
-    def add_comment(self, jira_issue_id, text):
+    def get_ticket_comments(self, jira_id_or_key):
+        """
+        Fetches all comments for a specific issue.
+        Using this endpoint exposes the 'parentId' field for nested replies.
+        """
+        endpoint = f"/rest/api/3/issue/{jira_id_or_key}/comment"
+        return self._request("GET", endpoint)
+
+    def add_comment(self, jira_issue_key, text):
         """
         Adds a comment to a specific Jira issue using Atlassian Document Format (ADF).
         Converts Markdown to ADF before sending.
@@ -567,10 +577,10 @@ class JiraClient:
 
         payload = {"body": adf_body}
         return self._request(
-            "POST", f"/rest/api/3/issue/{jira_issue_id}/comment", json=payload
+            "POST", f"/rest/api/3/issue/{jira_issue_key}/comment", json=payload
         )
 
-    def update_comment(self, jira_issue_id, jira_comment_id, text):
+    def update_comment(self, jira_issue_key, jira_comment_id, text):
         """
         Updates an existing comment on a Jira issue.
         Converts Markdown to ADF before sending.
@@ -580,14 +590,14 @@ class JiraClient:
         payload = {"body": adf_body}
         return self._request(
             "PUT",
-            f"/rest/api/3/issue/{jira_issue_id}/comment/{jira_comment_id}",
+            f"/rest/api/3/issue/{jira_issue_key}/comment/{jira_comment_id}",
             json=payload,
         )
 
-    def delete_comment(self, jira_issue_id, jira_comment_id):
+    def delete_comment(self, jira_issue_key, jira_comment_id):
         """
         Deletes a specific comment from a Jira issue.
         """
         return self._request(
-            "DELETE", f"/rest/api/3/issue/{jira_issue_id}/comment/{jira_comment_id}"
+            "DELETE", f"/rest/api/3/issue/{jira_issue_key}/comment/{jira_comment_id}"
         )

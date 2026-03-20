@@ -1,15 +1,12 @@
-import os
 from datetime import timedelta
+from html import escape
 
 from celery import shared_task
+from django.conf import settings
 from django.core.mail import EmailMessage
 from django.utils import timezone
-from dotenv import load_dotenv
 
 from tickets.models import Ticket, TicketSubscriber
-
-load_dotenv()
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
 
 
 @shared_task(bind=True, max_retries=3)
@@ -20,8 +17,13 @@ def send_ticket_assignment_email(
     Sends an email notification to a user when they are assigned to a ticket.
     Copies all active ticket subscribers on the email.
     """
-    ticket_url = f"{FRONTEND_BASE_URL}/project/{project_id}/tickets/{ticket_id}"
-    subject = f"Ticket Assigned: {ticket_title}"
+    safe_ticket_title = escape(str(ticket_title))
+    safe_project_title = escape(str(project_title))
+
+    ticket_url = (
+        f"{settings.FRONTEND_BASE_URL}/projects/{project_id}/tickets/{ticket_id}"
+    )
+    subject = f"Ticket Assigned: {safe_ticket_title}"
 
     html_content = f"""
         <table width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f5f5f5">
@@ -31,8 +33,8 @@ def send_ticket_assignment_email(
                 <tr>
                     <td>
                         <h2>Hello,</h2>
-                        <p>You have been assigned to a new ticket in the project <strong>{project_title}</strong>.</p>
-                        <p><strong>Ticket Title:</strong> {ticket_title}</p>
+                        <p>You have been assigned to a new ticket in the project <strong>{safe_project_title}</strong>.</p>
+                        <p><strong>Ticket Title:</strong> {safe_ticket_title}</p>
                         
                         <table cellspacing="0" cellpadding="0" border="0">
                             <tr>
@@ -69,7 +71,10 @@ def send_ticket_assignment_email(
     )
 
     email_message.content_subtype = "html"
-    email_message.send()
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -92,12 +97,20 @@ def notify_ticket_subscribers(self, ticket_id, changes):
     if not emails:
         return
 
-    ticket_url = f"{FRONTEND_BASE_URL}/project/{ticket.project.id}/tickets/{ticket.id}"
-    subject = f"Ticket Updated: {ticket.title}"
+    safe_ticket_title = escape(str(ticket.title))
+
+    ticket_url = (
+        f"{settings.FRONTEND_BASE_URL}/projects/{ticket.project.id}/tickets/{ticket.id}"
+    )
+    subject = f"Ticket Updated: {safe_ticket_title}"
 
     changes_html = "<ul>"
     for change in changes:
-        changes_html += f"<li style='margin-bottom: 8px;'><strong>{change['field']}:</strong> <br><span style='color: #dc3545; text-decoration: line-through;'>{change['old']}</span> &rarr; <span style='color: #28a745;'>{change['new']}</span></li>"
+        safe_field = escape(str(change.get("field", "")))
+        safe_old = escape(str(change.get("old", "None")))
+        safe_new = escape(str(change.get("new", "None")))
+
+        changes_html += f"<li style='margin-bottom: 8px;'><strong>{safe_field}:</strong> <br><span style='color: #dc3545; text-decoration: line-through;'>{safe_old}</span> &rarr; <span style='color: #28a745;'>{safe_new}</span></li>"
     changes_html += "</ul>"
 
     html_content = f"""
@@ -109,7 +122,7 @@ def notify_ticket_subscribers(self, ticket_id, changes):
                     <td>
                         <h2>Hello,</h2>
                         <p>A ticket you are subscribed to has been updated.</p>
-                        <p><strong>Ticket:</strong> {ticket.title}</p>
+                        <p><strong>Ticket:</strong> {safe_ticket_title}</p>
                         
                         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
                             <h3 style="margin-top: 0;">What Changed:</h3>
@@ -139,7 +152,10 @@ def notify_ticket_subscribers(self, ticket_id, changes):
         subject=subject, body=html_content, to=[primary_email], cc=cc_emails
     )
     email_message.content_subtype = "html"
-    email_message.send()
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -148,8 +164,12 @@ def notify_reporter_resolved(self, reporter_email, ticket_title, ticket_id, proj
     Sends an email notification to the original reporter when a ticket is marked as Resolved,
     prompting them to verify and close it. Copies all active subscribers.
     """
-    ticket_url = f"{FRONTEND_BASE_URL}/project/{project_id}/tickets/{ticket_id}"
-    subject = f"Resolved: {ticket_title}"
+    safe_ticket_title = escape(str(ticket_title))
+
+    ticket_url = (
+        f"{settings.FRONTEND_BASE_URL}/projects/{project_id}/tickets/{ticket_id}"
+    )
+    subject = f"Resolved: {safe_ticket_title}"
 
     html_content = f"""
     <table width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f5f5f5">
@@ -160,7 +180,7 @@ def notify_reporter_resolved(self, reporter_email, ticket_title, ticket_id, proj
                     <td>
                         <h2>Hello,</h2>
                         <p>Great news! A ticket you reported has been marked as <strong>Resolved</strong>.</p>
-                        <p><strong>Ticket Title:</strong> {ticket_title}</p>
+                        <p><strong>Ticket Title:</strong> {safe_ticket_title}</p>
                         <p>Please review the ticket to confirm the issue is fixed. If everything looks good, you can now mark it as Closed.</p>
                         
                         <table cellspacing="0" cellpadding="0" border="0">
@@ -198,7 +218,10 @@ def notify_reporter_resolved(self, reporter_email, ticket_title, ticket_id, proj
     )
 
     email_message.content_subtype = "html"
-    email_message.send()
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -239,7 +262,13 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
 
     assignee_name = ticket.assignee.email if ticket.assignee else "Unassigned"
 
-    ticket_url = f"{FRONTEND_BASE_URL}/projects/{ticket.project.id}/tickets/{ticket.id}"
+    safe_ticket_title = escape(str(ticket.title))
+    safe_project_title = escape(str(ticket.project.title))
+    safe_assignee_name = escape(str(assignee_name))
+
+    ticket_url = (
+        f"{settings.FRONTEND_BASE_URL}/projects/{ticket.project.id}/tickets/{ticket.id}"
+    )
 
     if ticket.status == Ticket.Status.RESOLVED:
         status_msg = (
@@ -249,10 +278,10 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
         status_msg = "Please ensure the required work is completed on time."
 
     if is_two_hour:
-        subject = f"Urgent Deadline Reminder: {ticket.title} (Due in 2 hours)"
+        subject = f"Urgent Deadline Reminder: {safe_ticket_title} (Due in 2 hours)"
         time_text = "is due in approximately <b>2 hours</b>"
     else:
-        subject = f"Deadline Reminder: {ticket.title}"
+        subject = f"Deadline Reminder: {safe_ticket_title}"
         time_text = "has a deadline of <b>tomorrow</b>"
 
     message = f"""
@@ -263,10 +292,10 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
                     <tr>
                         <td>
                             <h2>Hello,</h2>
-                            <p>This is an automated reminder that the ticket <b>'{ticket.title}'</b> in project <b>'{ticket.project.title}'</b> {time_text} ({ticket.deadline}).</p>
+                            <p>This is an automated reminder that the ticket <b>'{safe_ticket_title}'</b> in project <b>'{safe_project_title}'</b> {time_text} ({ticket.deadline}).</p>
                             
                             <p>
-                                <strong>Assignee:</strong> {assignee_name}<br>
+                                <strong>Assignee:</strong> {safe_assignee_name}<br>
                                 <strong>Current Status:</strong> {ticket.get_status_display()}
                             </p>
                             
@@ -296,7 +325,10 @@ def send_deadline_reminder(self, ticket_id, is_two_hour=False):
         cc=cc_emails,
     )
     email.content_subtype = "html"
-    email.send(fail_silently=False)
+    try:
+        email.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
 
     if not is_two_hour:
         two_hours_before = ticket.deadline - timedelta(hours=2)
@@ -337,8 +369,13 @@ def notify_new_subscriber(self, ticket_id, new_subscriber_email, new_subscriber_
     if not notify_emails:
         return
 
-    ticket_url = f"{FRONTEND_BASE_URL}/project/{ticket.project.id}/tickets/{ticket.id}"
-    subject = f"New Subscriber on Ticket: {ticket.title}"
+    safe_ticket_title = escape(str(ticket.title))
+    safe_new_subscriber_name = escape(str(new_subscriber_name))
+
+    ticket_url = (
+        f"{settings.FRONTEND_BASE_URL}/projects/{ticket.project.id}/tickets/{ticket.id}"
+    )
+    subject = f"New Subscriber on Ticket: {safe_ticket_title}"
 
     html_content = f"""
     <table width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f5f5f5">
@@ -348,8 +385,8 @@ def notify_new_subscriber(self, ticket_id, new_subscriber_email, new_subscriber_
                 <tr>
                     <td>
                         <h2>Hello,</h2>
-                        <p><strong>{new_subscriber_name}</strong> has just subscribed to a ticket you are following.</p>
-                        <p><strong>Ticket:</strong> {ticket.title}</p>
+                        <p><strong>{safe_new_subscriber_name}</strong> has just subscribed to a ticket you are following.</p>
+                        <p><strong>Ticket:</strong> {safe_ticket_title}</p>
                         
                         <table cellspacing="0" cellpadding="0" border="0" style="margin-top: 20px;">
                             <tr>
@@ -376,4 +413,7 @@ def notify_new_subscriber(self, ticket_id, new_subscriber_email, new_subscriber_
     )
 
     email_message.content_subtype = "html"
-    email_message.send()
+    try:
+        email_message.send()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)

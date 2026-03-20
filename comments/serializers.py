@@ -9,8 +9,7 @@ class CommentSerializer(serializers.ModelSerializer):
     Handles read/write of the description
     """
 
-    author_email = serializers.EmailField(source="author.email", read_only=True)
-
+    author_email = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
 
     class Meta:
@@ -42,3 +41,6 @@ class CommentSerializer(serializers.ModelSerializer):
             return obj.author == request.user
 
         return False
+
+    def get_author_email(self, obj):
+        return obj.author.email if obj.author else None
