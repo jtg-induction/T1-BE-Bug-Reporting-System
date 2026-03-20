@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from django.contrib.auth import get_user_model
 from django.db.models import Count, F, Q
 from django.db.models.functions import TruncDay
+from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
@@ -11,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.constants import history_time
+from core.utils import ReportGenerator
 from tickets.models import Ticket
 from users.serializers import CurrentUserSerializer, UserSerializer
 
@@ -155,3 +157,32 @@ class UserAPIViewSet(
                 )
 
         return Response(data)
+
+    @action(detail=True, methods=["get"], url_path="report-generate")
+    def report_generate(self, request, pk=None):
+        user = request.user
+        query = request.query_params
+
+        if not str(user.id) == pk:
+            raise PermissionDenied("You can not download others' report")
+
+        start_date = (
+            query.get("start-date")
+            if query and query.get("start-date")
+            else None
+        )
+        end_date = (
+            query.get("end-date") if query and query.get("end-date") else None
+        )
+        report_generator = ReportGenerator()
+        buffer = report_generator.generate_user_performance_report(
+            user=user,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename="report.pdf",
+            content_type="application/pdf",
+        )

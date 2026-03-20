@@ -1,11 +1,34 @@
 import logging
 import re
+from datetime import datetime, timedelta
+from io import BytesIO
 from urllib.parse import urlparse
 
 import requests
+<<<<<<< HEAD
 from requests.adapters import HTTPAdapter
+=======
+from django.db.models import Count, F, Q
+from django.db.models.functions import TruncDay
+from django.utils import timezone
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+>>>>>>> b716fb6 (FS_06: Added User Report)
 from requests.auth import HTTPBasicAuth
 from urllib3.util.retry import Retry
+
+from tickets.models import Ticket
 
 logger = logging.getLogger(__name__)
 
@@ -605,3 +628,255 @@ class JiraClient:
         return self._request(
             "DELETE", f"/rest/api/3/issue/{jira_issue_key}/comment/{jira_comment_id}"
         )
+
+
+class ReportGenerator:
+    
+    def generate_project_report(
+        self, project_key, project_id, start_date=None, end_date=None, user_ids_raw=""
+    ):
+        filter_date_format = "%Y-%m-%d"
+        now = timezone.now()
+        
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
+        
+        base_qs = Ticket.objects.filter(project_id=project_id)
+        if user_ids:
+            base_qs = base_qs.filter(assignee__id__in=user_ids)
+
+        if not start_date and not end_date:
+            start_dt = (now - timedelta(days=now.weekday())).date()
+            end_dt = now.date()
+        else:
+            start_dt = datetime.strptime(start_date, filter_date_format).date() if start_date else None
+            end_dt = datetime.strptime(end_date, filter_date_format).date() if end_date else None
+
+        created_qs = base_qs
+        if start_dt:
+            created_qs = created_qs.filter(created_at__date__gte=start_dt)
+        if end_dt:
+            created_qs = created_qs.filter(created_at__date__lte=end_dt)
+
+        summary_metrics = created_qs.aggregate(
+            completed=Count("id", filter=Q(status=4)),
+            total=Count("id"),
+            missed_deadline=Count("id", filter=Q(deadline__lt=now) & ~Q(status=4)),
+            open=Count("id", filter=Q(status=1)),
+            in_progress=Count("id", filter=Q(status=2)),
+            resolved=Count("id", filter=Q(status=3)),
+            lowest=Count("id", filter=Q(severity=1)),
+            low=Count("id", filter=Q(severity=2)),
+            medium=Count("id", filter=Q(severity=3)),
+            high=Count("id", filter=Q(severity=4)),
+            highest=Count("id", filter=Q(severity=5)),
+        )
+
+        deadline_qs = base_qs.filter(deadline__isnull=False)
+        if start_dt:
+            deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
+        if end_dt:
+            deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
+
+        deadline_trend = deadline_qs.annotate(day=TruncDay("deadline")).values("day").annotate(
+            missed=Count("id", filter=Q(closed_at__date__gt=F("deadline__date")) | Q(closed_at__isnull=True, deadline__lt=now)),
+            on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
+            before_time=Count("id", filter=Q(closed_at__date__lt=F("deadline__date"))),
+        ).order_by("day")
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("MainTitle", parent=styles["Title"], fontSize=18, textColor=colors.HexColor("#2C3E50"), alignment=TA_LEFT)
+        sub_style = ParagraphStyle("SubTitle", parent=styles["Heading2"], fontSize=11, textColor=colors.HexColor("#34495E"), spaceBefore=10, spaceAfter=5)
+        
+        story = []
+        story.append(Paragraph("Project Comprehensive Report", title_style))
+        story.append(Paragraph(f"Generated: {now.strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
+        story.append(Paragraph(f"Filter Period: {start_dt or 'All'} to {end_dt or 'Now'}", styles["Normal"]))
+        story.append(Spacer(1, 0.2 * inch))
+
+        def get_table_or_nodata(data_list, col_widths, bg_color="#2C3E50"):
+            if len(data_list) <= 1:
+                return Paragraph("<i>No tickets with deadlines.</i>", styles["Italic"])
+            t = Table(data_list, colWidths=col_widths)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor(bg_color)),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,0), 8),
+            ]))
+            return t
+
+        story.append(Paragraph("1. Global Ticket Overview", sub_style))
+        t_global_data = [["Total Tickets", "Completed", "Missed Deadline", "Completion %"]]
+        if summary_metrics["total"] > 0:
+            t_global_data.append([
+                summary_metrics["total"], summary_metrics["completed"], summary_metrics["missed_deadline"], 
+                f"{(summary_metrics['completed']/summary_metrics['total']*100):.1f}%"
+            ])
+        story.append(get_table_or_nodata(t_global_data, [1.8*inch]*4))
+
+        story.append(Paragraph("2. Ticket Status Distribution", sub_style))
+        t_status_data = [["Open", "In Progress", "Resolved", "Closed"]]
+        if summary_metrics["total"] > 0:
+            t_status_data.append([summary_metrics["open"], summary_metrics["in_progress"], summary_metrics["resolved"], summary_metrics["completed"]])
+        story.append(get_table_or_nodata(t_status_data, [1.8*inch]*4, "#2980B9"))
+
+        story.append(Paragraph("3. Severity Breakdown", sub_style))
+        t_sev_data = [["Lowest", "Low", "Medium", "High", "Highest"]]
+        if summary_metrics["total"] > 0:
+            t_sev_data.append([summary_metrics["lowest"], summary_metrics["low"], summary_metrics["medium"], summary_metrics["high"], summary_metrics["highest"]])
+        story.append(get_table_or_nodata(t_sev_data, [1.44*inch]*5, "#7F8C8D"))
+
+        story.append(Paragraph("4. Daily Deadline Performance", sub_style))
+        t_dead_data = [["Date", "Missed", "On Time", "Before Time"]]
+        for d in deadline_trend[:8]:
+            t_dead_data.append([d['day'].strftime('%Y-%m-%d'), d['missed'], d['on_time'], d['before_time']])
+        story.append(get_table_or_nodata(t_dead_data, [1.8*inch]*4, "#E67E22"))
+
+        story.append(PageBreak()) 
+        story.append(Paragraph("5. Detailed Ticket Log", sub_style))
+        t_log_data = [["SN", "Title", "Key", "Assignee", "Reporter", "Updated At", "Status", "Severity", "Deadline", "Closed At"]]
+        for i, t in enumerate(created_qs, 1):
+            t_log_data.append([
+                i, (t.title[:15] + "..") if len(t.title) > 17 else t.title, t.jira_key or "-",
+                f"{t.assignee.first_name[0]}. {t.assignee.last_name}" if t.assignee else "N/A",
+                f"{t.reporter.first_name[0]}. {t.reporter.last_name}",
+                t.updated_at.strftime("%y-%m-%d") if t.updated_at else "-", 
+                t.get_status_display(),
+                t.get_severity_display(), 
+                t.deadline.strftime("%y-%m-%d") if t.deadline else "No Deadline",
+                t.closed_at.strftime("%y-%m-%d") if t.closed_at else "-"
+            ])
+        
+        log_widths = [0.3*inch, 1.3*inch, 0.6*inch, 0.9*inch, 0.9*inch, 0.6*inch, 0.6*inch, 0.4*inch, 0.65*inch, 0.65*inch]
+        story.append(get_table_or_nodata(t_log_data, log_widths, "#34495E"))
+
+        def footer(canvas, doc):
+            canvas.saveState()
+            canvas.setFont("Helvetica", 7)
+            canvas.drawRightString(550, 20, f"Page {doc.page} | Project Key: {project_key}")
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=footer, onLaterPages=footer)
+        buffer.seek(0)
+        return buffer
+    
+    def generate_user_performance_report(self, user, start_date=None, end_date=None):
+        filter_date_format = "%Y-%m-%d"
+        now = timezone.now()
+        
+        if not start_date and not end_date:
+            start_dt = (now - timedelta(days=now.weekday())).date()
+            end_dt = now.date()
+        else:
+            start_dt = datetime.strptime(start_date, filter_date_format).date() if start_date else None
+            end_dt = datetime.strptime(end_date, filter_date_format).date() if end_date else None
+
+        initial_queryset = Ticket.objects.filter(assignee=user)
+        
+        created_qs = initial_queryset
+        if start_dt:
+            created_qs = created_qs.filter(created_at__date__gte=start_dt)
+        if end_dt:
+            created_qs = created_qs.filter(created_at__date__lte=end_dt)
+
+        metrics = created_qs.aggregate(
+            open=Count("id", filter=Q(status=1)),
+            in_progress=Count("id", filter=Q(status=2)),
+            resolved=Count("id", filter=Q(status=3)),
+            closed=Count("id", filter=Q(status=4)),
+            total=Count("id"),
+            lowest=Count("id", filter=Q(severity=1)),
+            low=Count("id", filter=Q(severity=2)),
+            medium=Count("id", filter=Q(severity=3)),
+            high=Count("id", filter=Q(severity=4)),
+            highest=Count("id", filter=Q(severity=5)),
+        )
+
+        deadline_qs = initial_queryset.filter(deadline__isnull=False)
+        if start_dt:
+            deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
+        if end_dt:
+            deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
+
+        deadline_trend = deadline_qs.annotate(day=TruncDay("deadline")).values("day").annotate(
+            missed=Count("id", filter=Q(closed_at__date__gt=F("deadline__date")) | Q(closed_at__isnull=True, deadline__lt=now)),
+            on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
+            before_time=Count("id", filter=Q(closed_at__date__lt=F("deadline__date"))),
+        ).order_by("day")
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle("MainTitle", parent=styles["Title"], fontSize=18, textColor=colors.HexColor("#2980B9"), alignment=TA_LEFT)
+        sub_style = ParagraphStyle("SubTitle", parent=styles["Heading2"], fontSize=11, textColor=colors.HexColor("#34495E"), spaceBefore=10, spaceAfter=5)
+        
+        story = []
+        user_name = f"{user.first_name} {user.last_name}"
+        
+        story.append(Paragraph(f"User Performance Report: {user_name}", title_style))
+        story.append(Paragraph(f"Generated: {now.strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
+        story.append(Paragraph(f"Reporting Period: {start_dt or 'All'} to {end_dt or 'Now'}", styles["Normal"]))
+        story.append(Spacer(1, 0.2 * inch))
+
+        def get_styled_table(data, col_widths, color="#2C3E50"):
+            t = Table(data, colWidths=col_widths)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor(color)),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 9),
+            ]))
+            return t
+
+        story.append(Paragraph("1. Workload Summary", sub_style))
+        status_data = [["Total Tickets", "Open", "In Progress", "Resolved", "Closed"]]
+        status_data.append([metrics["total"], metrics["open"], metrics["in_progress"], metrics["resolved"], metrics["closed"]])
+        story.append(get_styled_table(status_data, [1.5*inch]*5, "#2C3E50"))
+
+        story.append(Paragraph("2. Assigned Severity Breakdown", sub_style))
+        sev_data = [["Lowest", "Low", "Medium", "High", "Highest"]]
+        sev_data.append([metrics["lowest"], metrics["low"], metrics["medium"], metrics["high"], metrics["highest"]])
+        story.append(get_styled_table(sev_data, [1.5*inch]*5, "#7F8C8D"))
+
+        story.append(Paragraph("3. Deadline Performance (Trend)", sub_style))
+        if deadline_trend.exists():
+            dead_data = [["Deadline Date", "Missed", "On Time", "Before Time"]]
+            for d in deadline_trend[:10]:
+                dead_data.append([d['day'].strftime('%Y-%m-%d'), d['missed'], d['on_time'], d['before_time']])
+            story.append(get_styled_table(dead_data, [1.8*inch]*4, "#E67E22"))
+        else:
+            story.append(Paragraph("<i>No deadline data available for this period.</i>", styles["Italic"]))
+
+        story.append(PageBreak())
+        story.append(Paragraph("4. Detailed Task Log", sub_style))
+        log_data = [["SN", "Ticket", "Key", "Status", "Severity", "Deadline"]]
+        
+        for i, t in enumerate(created_qs, 1):
+            log_data.append([
+                i, (t.title[:30] + "..") if len(t.title) > 32 else t.title,
+                t.jira_key or "-",
+                t.get_status_display(),
+                t.get_severity_display(),
+                t.deadline.strftime("%y-%m-%d") if t.deadline else "-"
+            ])
+        
+        log_widths = [0.5*inch, 2.5*inch, 1.0*inch, 1.0*inch, 1.0*inch, 1.2*inch]
+        story.append(get_styled_table(log_data, log_widths, "#34495E"))
+
+        def footer(canvas, doc):
+            canvas.saveState()
+            canvas.setFont("Helvetica", 8)
+            canvas.drawRightString(550, 20, f"Page {doc.page} | User: {user_name}")
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=footer, onLaterPages=footer)
+        buffer.seek(0)
+        return buffer

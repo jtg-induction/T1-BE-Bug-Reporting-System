@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.db.models import Count, F, Q
 from django.db.models.functions import TruncDay
+from django.http import FileResponse
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
@@ -15,7 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.tasks import send_invitation_email
-from core.utils import JiraClient, JiraClientException
+from core.utils import JiraClient, JiraClientException, ReportGenerator
 from projects.filters import ProjectFilter, ProjectMemberFilter
 from projects.models import Project, ProjectMember
 from projects.permissions import IsAdmin
@@ -752,3 +753,38 @@ class ProjectViewSet(
                 )
 
         return Response(data)
+
+    @action(detail=True, methods=["get"], url_path="report-generate")
+    def report_generate(self, request, pk=None):
+        user = request.user
+        query = request.query_params
+        if not ProjectMember.objects.filter(
+            project__id=pk,
+            member=user,
+            status=ProjectMember.Status.ACTIVE,
+            role=ProjectMember.Role.ADMIN,
+        ).exists():
+            raise PermissionDenied("You are not an Admin of this Project")
+
+        start_date = (
+            query.get("start-date")
+            if query and query.get("start-date")
+            else None
+        )
+        end_date = (
+            query.get("end-date") if query and query.get("end-date") else None
+        )
+        project_key = Project.objects.filter(id=pk).values_list("key")
+        report_generator = ReportGenerator()
+        buffer = report_generator.generate_project_report(
+            project_key=project_key,
+            project_id=pk,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename="report.pdf",
+            content_type="application/pdf",
+        )
