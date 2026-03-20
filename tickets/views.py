@@ -53,12 +53,16 @@ class UserTicketViewSet(
         user = self.request.user
         return (
             Ticket.objects.filter(
-                Q(assignee=user)
-                | Q(reporter=user)
-                | Q(
-                    subscribers__user=user,
-                    subscribers__status=TicketSubscriber.Status.SUBSCRIBED,
+                (
+                    Q(assignee=user)
+                    | Q(reporter=user)
+                    | Q(
+                        subscribers__user=user,
+                        subscribers__status=TicketSubscriber.Status.SUBSCRIBED,
+                    )
                 )
+                & Q(project__project_members__member=self.request.user)
+                & Q(project__project_members__status=ProjectMember.Status.ACTIVE)
             )
             .distinct()
             .order_by("-created_at")
@@ -109,7 +113,9 @@ class ProjectTicketViewSet(viewsets.ModelViewSet, TicketFilterMixin):
         Retrieves all tickets associated with the given project ID.
         """
         return Ticket.objects.filter(
-            project_id=self.kwargs.get("project_id")
+            project_id=self.kwargs.get("project_id"),
+            project__project_members__member=self.request.user,
+            project__project_members__status=ProjectMember.Status.ACTIVE,
         ).select_related("assignee", "reporter", "project")
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]
@@ -599,6 +605,30 @@ class ProjectTicketViewSet(viewsets.ModelViewSet, TicketFilterMixin):
                                 "new": updated_state[field],
                             }
                         )
+
+                        if field == "Assignee" and updated_ticket.assignee:
+                            TicketSubscriber.objects.update_or_create(
+                                user=updated_ticket.assignee,
+                                ticket=ticket,
+                                defaults={"status": TicketSubscriber.Status.SUBSCRIBED},
+                            )
+
+                            subscriber_name = (
+                                updated_ticket.assignee.first_name
+                                or updated_ticket.assignee.email
+                            )
+                            notify_new_subscriber.delay(
+                                ticket_id=str(ticket.id),
+                                new_subscriber_email=updated_ticket.assignee.email,
+                                new_subscriber_name=subscriber_name,
+                            )
+                            send_ticket_assignment_email.delay(
+                                email=updated_ticket.assignee.email,
+                                ticket_id=str(ticket.id),
+                                ticket_title=ticket.title,
+                                project_id=str(project.id),
+                                project_title=project.title,
+                            )
 
                 if "deadline" in general_data:
                     self._update_deadline_reminder(updated_ticket, old_task_id)

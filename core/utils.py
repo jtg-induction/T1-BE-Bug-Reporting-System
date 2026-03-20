@@ -84,18 +84,22 @@ class JiraClient:
                 )
 
             if not (200 <= response.status_code < 300):
-                error_msg = (
-                    response_data.get("errorMessages", ["Unknown Jira Error"])
-                    if isinstance(response_data, dict)
-                    else "Unknown Jira Error"
-                )
-                field_errors = (
-                    response_data.get("errors", {})
-                    if isinstance(response_data, dict)
-                    else {}
-                )
+                if isinstance(response_data, dict):
+                    error_messages = response_data.get("errorMessages", [])
+                    error_msg = (
+                        error_messages[0] if error_messages else "Unknown Jira Error"
+                    )
+
+                    field_errors = response_data.get("errors", {})
+                else:
+                    error_msg = "Unknown Jira Error"
+                    field_errors = {}
+
                 if field_errors:
-                    error_msg = f"{error_msg}. Field errors: {field_errors}"
+                    if error_msg == "Unknown Jira Error":
+                        error_msg = f"Field validation failed: {field_errors}"
+                    else:
+                        error_msg = f"{error_msg}. Field errors: {field_errors}"
 
                 raise JiraClientException(
                     f"Jira API Error: {error_msg}",
