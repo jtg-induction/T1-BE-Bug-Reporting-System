@@ -7,7 +7,7 @@ from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ParseError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -174,6 +174,8 @@ class UserAPIViewSet(
         end_date = (
             query.get("end-date") if query and query.get("end-date") else None
         )
+        if start_date and end_date and start_date>end_date:
+            return ParseError("Invalid Date Filters")
         report_generator = ReportGenerator()
         buffer = report_generator.generate_user_performance_report(
             user=user,

@@ -37,7 +37,7 @@ User = get_user_model()
 
 
 class UserTicketViewSet(
-    mixins.ListModelMixin, viewsets.GenericViewSet, TicketFilterMixin
+    TicketFilterMixin, mixins.ListModelMixin, viewsets.GenericViewSet
 ):
     """
     ViewSet for listing tickets associated with the authenticated user.
@@ -88,7 +88,7 @@ class UserTicketViewSet(
     }
 
 
-class ProjectTicketViewSet(viewsets.ModelViewSet, TicketFilterMixin):
+class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing tickets within a specific project context.
     Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .

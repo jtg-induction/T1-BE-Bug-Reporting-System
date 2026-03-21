@@ -779,6 +779,9 @@ class ProjectViewSet(
         end_date = (
             query.get("end-date") if query and query.get("end-date") else None
         )
+        if start_date and end_date and start_date>end_date:
+            return ParseError("Invalid Date Filters")
+        
         project_key = Project.objects.filter(id=pk).values_list("key")
         report_generator = ReportGenerator()
         buffer = report_generator.generate_project_report(
