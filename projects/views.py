@@ -766,6 +766,11 @@ class ProjectViewSet(
         ).exists():
             raise PermissionDenied("You are not an Admin of this Project")
 
+        user_ids = (
+            query.get("user-ids")
+            if query and query.get("user-ids")
+            else ""
+        )
         start_date = (
             query.get("start-date")
             if query and query.get("start-date")
@@ -777,6 +782,7 @@ class ProjectViewSet(
         project_key = Project.objects.filter(id=pk).values_list("key")
         report_generator = ReportGenerator()
         buffer = report_generator.generate_project_report(
+            user_ids_raw=user_ids,
             project_key=project_key,
             project_id=pk,
             start_date=start_date,
