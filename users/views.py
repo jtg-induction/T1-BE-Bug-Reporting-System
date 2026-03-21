@@ -89,6 +89,9 @@ class UserAPIViewSet(
         end_date = query.get("end-date")
         section = query.get("section")
 
+        if start_date and end_date and start_date>end_date:
+            raise ParseError("Invalid Date Filters")
+
         if not start_date and not end_date:
             start_dt = (now - timedelta(days=now.weekday())).date()
             end_dt = now.date()
@@ -175,7 +178,7 @@ class UserAPIViewSet(
             query.get("end-date") if query and query.get("end-date") else None
         )
         if start_date and end_date and start_date>end_date:
-            return ParseError("Invalid Date Filters")
+            raise ParseError("Invalid Date Filters")
         report_generator = ReportGenerator()
         buffer = report_generator.generate_user_performance_report(
             user=user,
