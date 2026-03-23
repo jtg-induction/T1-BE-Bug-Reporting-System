@@ -5,9 +5,6 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 import requests
-<<<<<<< HEAD
-from requests.adapters import HTTPAdapter
-=======
 from django.db.models import Count, F, Q
 from django.db.models.functions import TruncDay
 from django.utils import timezone
@@ -24,7 +21,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
->>>>>>> b716fb6 (FS_06: Added User Report)
+from requests.adapters import HTTPAdapter
 from requests.auth import HTTPBasicAuth
 from urllib3.util.retry import Retry
 

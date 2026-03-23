@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Q, Subquery
 from django.db.models.functions import TruncDay
 from django.http import FileResponse
 from django.utils import timezone
@@ -454,11 +454,14 @@ class ProjectViewSet(
         pm_admin = ProjectMember.objects.filter(member=admin, project=project).first()
         pm_member = ProjectMember.objects.filter(member=member, project=project).first()
 
-        if role == ProjectMember.Role.ADMIN.value:
+        if role == 3:
             if project.owner == admin:
                 if pm_member.role != ProjectMember.Role.ADMIN:
                     pm_member.role = ProjectMember.Role.ADMIN
                     pm_member.save()
+                
+                pm_admin.status = ProjectMember.Status.REVOKED
+                pm_admin.save()
 
                 project.owner = member
                 project.save()
@@ -523,13 +526,17 @@ class ProjectViewSet(
         user = request.user
         project = self.get_object()
 
-        if not Project.objects.filter(id=pk).exists():
+        if not project:
             raise NotFound("Project does not exist")
 
+        active_members_subquery = ProjectMember.objects.filter(
+            project=project,
+            status=ProjectMember.Status.ACTIVE
+        ).values('member_id')
+
         members = User.objects.exclude(
-            user_projects__project=project,
-            user_projects__status=ProjectMember.Status.ACTIVE,
-        )
+            id__in=Subquery(active_members_subquery)
+        ).exclude(id=request.user.id)
 
         serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
