@@ -116,10 +116,8 @@ class ProjectViewSet(
 
     def create(self, request, *args, **kwargs):
         """
-        Creates a local project and syncs it with Jira.
-
-        Uses an atomic transaction to create the Project and ProjectMember records,
-        calls the Jira API to create the remote project, and stores the Jira ID locally.
+        Handles the creation of a new project by creating it in Jira first,
+        and then saving it to the local database.
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -136,11 +134,33 @@ class ProjectViewSet(
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            jira_response = jira_client.create_project(
+                key=key,
+                name=title,
+                description=description,
+                lead_account_id=request.user.jiraID,
+            )
+            jira_project_id = jira_response.get("id")
+
+        except JiraClientException as e:
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+            return Response(
+                {
+                    "error": f"Failed to create project in Jira: {str(e)}",
+                    "jira_details": e.response_data,
+                },
+                status=status_code,
+            )
+        try:
             with transaction.atomic():
                 project = serializer.save(
                     jira_url=jira_client.base_url,
                     owner=request.user,
-                    jira_project_id="",
+                    jira_project_id=jira_project_id,
                 )
 
                 ProjectMember.objects.create(
@@ -151,38 +171,18 @@ class ProjectViewSet(
                     status=ProjectMember.Status.ACTIVE,
                 )
 
-                jira_response = jira_client.create_project(
-                    key=key,
-                    name=title,
-                    description=description,
-                    lead_account_id=request.user.jiraID,
-                )
-
-                project.jira_project_id = jira_response.get("id")
-                project.save(update_fields=["jira_project_id"])
-
-                response_serializer = ProjectSerializer(
-                    project, context={"request": request}
-                )
-                return Response(
-                    response_serializer.data, status=status.HTTP_201_CREATED
-                )
-
-        except JiraClientException as e:
-            status_code = (
-                status.HTTP_400_BAD_REQUEST
-                if e.status_code
-                else status.HTTP_503_SERVICE_UNAVAILABLE
+            response_serializer = ProjectSerializer(
+                project, context={"request": request}
             )
-            return Response(
-                {"error": str(e), "jira_details": e.response_data},
-                status=status_code,
-            )
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            logger.exception("Unexpected error during project creation")
+            logger.exception("Unexpected error during local project creation")
             return Response(
-                {"error": "A database error occurred.", "details": str(e)},
+                {
+                    "error": "Project created in Jira, but a local database error occurred.",
+                    "details": str(e),
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -195,6 +195,7 @@ class ProjectViewSet(
             instance, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
+
         key = instance.key
         title = serializer.validated_data.get("title")
         description = serializer.validated_data.get("description")
@@ -207,10 +208,9 @@ class ProjectViewSet(
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            with transaction.atomic():
-                super().update(request, *args, **kwargs)
+            super().update(request, *args, **kwargs)
 
-                jira_client.update_project(
+            jira_client.update_project(
                     key=key,
                     name=title,
                     description=description,
@@ -218,10 +218,10 @@ class ProjectViewSet(
                     project_id=instance.jira_project_id,
                 )
 
-                response_serializer = ProjectSerializer(
+            response_serializer = ProjectSerializer(
                     instance, context={"request": request}
                 )
-                return Response(
+            return Response(
                     response_serializer.data,
                     status=status.HTTP_200_OK,
                 )
@@ -233,12 +233,15 @@ class ProjectViewSet(
                 else status.HTTP_503_SERVICE_UNAVAILABLE
             )
             return Response(
-                {"error": str(e), "jira_details": e.response_data},
+                {
+                    "error": f"Project updated locally, but Jira sync failed: {str(e)}",
+                    "jira_details": e.response_data,
+                },
                 status=status_code,
             )
 
         except Exception as e:
-            logger.exception("Unexpected error during project updation")
+            logger.exception("Unexpected error during project update")
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -577,13 +580,13 @@ class ProjectViewSet(
                 raise ParseError("Project already active")
             raise ParseError("Project already archived")
 
-        access_token = user.jira_access_token
-        raw_url = project.jira_url
-
         try:
-            jira_client = JiraClient(raw_url, user.email, access_token)
+            jira_client = JiraClient(
+                project.jira_url, user.email, user.jira_access_token
+            )
         except ValueError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             with transaction.atomic():
                 project.status = new_status
@@ -606,16 +609,15 @@ class ProjectViewSet(
                     )
 
         except JiraClientException as e:
-            status_code = (
-                status.HTTP_400_BAD_REQUEST
-                if e.status_code
-                else status.HTTP_503_SERVICE_UNAVAILABLE
-            )
             return Response(
-                {"error": str(e), "jira_details": e.response_data},
-                status=status_code,
+                {
+                    "error": f"Project unarchived locally, but Jira sync failed: {str(e)}",
+                    "jira_details": e.response_data,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-
         except Exception as e:
             logger.exception(error_msg)
             return Response(

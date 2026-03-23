@@ -1,4 +1,3 @@
-from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -67,26 +66,24 @@ class CommentViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
 
+        display_name = f"{user.first_name} {user.last_name}".strip() or user.email
+
         try:
-            with transaction.atomic():
-                display_name = (
-                    f"{user.first_name} {user.last_name}".strip() or user.email
+            comment = serializer.save(
+                ticket=ticket, author=user, author_name=display_name
+            )
+
+            if project.jira_url and user.jira_access_token and ticket.jira_key:
+                jira_client = JiraClient(
+                    project.jira_url, user.email, user.jira_access_token
                 )
-                comment = serializer.save(
-                    ticket=ticket, author=user, author_name=display_name
+
+                jira_response = jira_client.add_comment(
+                    jira_issue_key=ticket.jira_key, text=comment.description
                 )
 
-                if project.jira_url and user.jira_access_token and ticket.jira_key:
-                    jira_client = JiraClient(
-                        project.jira_url, user.email, user.jira_access_token
-                    )
-
-                    jira_response = jira_client.add_comment(
-                        jira_issue_key=ticket.jira_key, text=comment.description
-                    )
-
-                    comment.jira_id = jira_response.get("id")
-                    comment.save(update_fields=["jira_id"])
+                comment.jira_id = jira_response.get("id")
+                comment.save(update_fields=["jira_id"])
 
             response_serializer = self.get_serializer(
                 comment, context={"request": request}
@@ -96,7 +93,7 @@ class CommentViewSet(viewsets.ModelViewSet):
         except JiraClientException as e:
             return Response(
                 {
-                    "error": f"Failed to sync comment with Jira: {str(e)}",
+                    "error": f"Comment saved locally, but failed to sync with Jira: {str(e)}",
                     "jira_details": e.response_data,
                 },
                 status=e.status_code
@@ -133,24 +130,22 @@ class CommentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         try:
-            with transaction.atomic():
-                updated_comment = serializer.save(updated_by=user)
+            updated_comment = serializer.save(updated_by=user)
+            if (
+                project.jira_url
+                and user.jira_access_token
+                and ticket.jira_key
+                and updated_comment.jira_id
+            ):
+                jira_client = JiraClient(
+                    project.jira_url, user.email, user.jira_access_token
+                )
 
-                if (
-                    project.jira_url
-                    and user.jira_access_token
-                    and ticket.jira_key
-                    and updated_comment.jira_id
-                ):
-                    jira_client = JiraClient(
-                        project.jira_url, user.email, user.jira_access_token
-                    )
-
-                    jira_client.update_comment(
-                        jira_issue_key=ticket.jira_key,
-                        jira_comment_id=updated_comment.jira_id,
-                        text=updated_comment.description,
-                    )
+                jira_client.update_comment(
+                    jira_issue_key=ticket.jira_key,
+                    jira_comment_id=updated_comment.jira_id,
+                    text=updated_comment.description,
+                )
 
             response_serializer = self.get_serializer(
                 updated_comment, context={"request": request}
@@ -160,10 +155,12 @@ class CommentViewSet(viewsets.ModelViewSet):
         except JiraClientException as e:
             return Response(
                 {
-                    "error": f"Failed to update comment in Jira: {str(e)}",
+                    "error": f"Comment updated locally, but failed to sync with Jira: {str(e)}",
                     "jira_details": e.response_data,
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=e.status_code
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except Exception as e:
             return Response(
@@ -194,32 +191,31 @@ class CommentViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            with transaction.atomic():
-                comment.delete()
+            jira_url = project.jira_url
+            jira_token = user.jira_access_token
+            jira_key = ticket.jira_key
+            jira_comment_id = comment.jira_id
 
-                if (
-                    project.jira_url
-                    and user.jira_access_token
-                    and ticket.jira_key
-                    and comment.jira_id
-                ):
-                    jira_client = JiraClient(
-                        project.jira_url, user.email, user.jira_access_token
-                    )
+            comment.delete()
 
-                    jira_client.delete_comment(
-                        jira_issue_key=ticket.jira_key, jira_comment_id=comment.jira_id
-                    )
+            if jira_url and jira_token and jira_key and jira_comment_id:
+                jira_client = JiraClient(jira_url, user.email, jira_token)
+
+                jira_client.delete_comment(
+                    jira_issue_key=jira_key, jira_comment_id=jira_comment_id
+                )
 
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         except JiraClientException as e:
             return Response(
                 {
-                    "error": f"Failed to delete comment from Jira: {str(e)}",
+                    "error": f"Comment deleted locally, but failed to delete from Jira: {str(e)}",
                     "jira_details": e.response_data,
                 },
-                status=e.status_code if e.status_code else status.HTTP_400_BAD_REQUEST,
+                status=e.status_code
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except Exception as e:
             return Response(
