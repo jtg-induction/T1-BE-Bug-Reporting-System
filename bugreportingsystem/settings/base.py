@@ -7,6 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY")
 FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY")
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
+if not FRONTEND_BASE_URL:
+    raise ValueError("FRONTEND_BASE_URL environment variable is not set in settings.py")
 
 DJANGO_APPS = [
     "django.contrib.admin",

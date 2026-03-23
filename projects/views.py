@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectViewSet(
-    mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
     """
     ViewSet for managing projects.
@@ -34,7 +37,7 @@ class ProjectViewSet(
             status=Project.Status.ACTIVE,
             project_members__member=self.request.user,
             project_members__status=ProjectMember.Status.ACTIVE,
-        ).distinct()
+        )
 
     @action(detail=False, methods=["get"], url_path="archived")
     def archived_projects(self, request):
@@ -46,7 +49,7 @@ class ProjectViewSet(
             status=Project.Status.ARCHIVED,
             project_members__member=request.user,
             project_members__status=ProjectMember.Status.ACTIVE,
-        ).distinct()
+        )
         serializer = self.get_serializer(archived_qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -74,7 +77,11 @@ class ProjectViewSet(
 
         try:
             with transaction.atomic():
-                project = serializer.save(jira_url=jira_client.base_url, owner=request.user, jira_project_id="")
+                project = serializer.save(
+                    jira_url=jira_client.base_url,
+                    owner=request.user,
+                    jira_project_id="",
+                )
 
                 ProjectMember.objects.create(
                     project=project,
@@ -85,21 +92,35 @@ class ProjectViewSet(
                 )
 
                 jira_response = jira_client.create_project(
-                    key=key, name=title, description=description, lead_account_id=request.user.jiraID
+                    key=key,
+                    name=title,
+                    description=description,
+                    lead_account_id=request.user.jiraID,
                 )
 
                 project.jira_project_id = jira_response.get("id")
                 project.save(update_fields=["jira_project_id"])
 
-                response_serializer = ProjectSerializer(project, context={"request": request})
-                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+                response_serializer = ProjectSerializer(
+                    project, context={"request": request}
+                )
+                return Response(
+                    response_serializer.data, status=status.HTTP_201_CREATED
+                )
 
         except JiraClientException as e:
-            status_code = status.HTTP_400_BAD_REQUEST if e.status_code else status.HTTP_503_SERVICE_UNAVAILABLE
-            return Response({"error": str(e), "jira_details": e.response_data}, status=status_code)
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+            return Response(
+                {"error": str(e), "jira_details": e.response_data}, status=status_code
+            )
 
         except Exception as e:
             logger.exception("Unexpected error during project creation")
             return Response(
-                {"error": "A database error occurred.", "details": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "A database error occurred.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

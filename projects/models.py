@@ -19,15 +19,23 @@ class Project(BaseModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=100)
     description = models.TextField(verbose_name="Description of project")
-    status = models.IntegerField(choices=Status.choices, default=Status.ACTIVE)
-    members = models.ManyToManyField(
-        settings.AUTH_USER_MODEL, through="ProjectMember", through_fields=("project", "member")
+    status = models.PositiveSmallIntegerField(
+        choices=Status.choices, default=Status.ACTIVE
     )
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="project_managed", on_delete=models.RESTRICT)
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        through="ProjectMember",
+        through_fields=("project", "member"),
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name="project_managed",
+        on_delete=models.RESTRICT,
+    )
     archived_at = models.DateTimeField(null=True, blank=True)
-    key = models.CharField(max_length=50)
+    key = models.CharField(max_length=50, unique=True)
     jira_url = models.URLField()
-    jira_project_id = models.CharField()
+    jira_project_id = models.CharField(max_length=50)
 
     def __str__(self):
         """
@@ -53,13 +61,22 @@ class ProjectMember(BaseModel):
         REJECTED = 3, ("Rejected")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    project = models.ForeignKey(Project, related_name="project_members", on_delete=models.CASCADE)
-    member = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="user_projects", on_delete=models.CASCADE)
-    inviter = models.ForeignKey(
-        settings.AUTH_USER_MODEL, related_name="invited_members", on_delete=models.SET_NULL, null=True
+    project = models.ForeignKey(
+        Project, related_name="project_members", on_delete=models.CASCADE
     )
-    role = models.IntegerField(choices=Role.choices, default=Role.DEV)
-    status = models.IntegerField(choices=Status.choices, default=Status.INVITED)
+    member = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="user_projects", on_delete=models.CASCADE
+    )
+    inviter = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name="invited_members",
+        on_delete=models.SET_NULL,
+        null=True,
+    )
+    role = models.PositiveSmallIntegerField(choices=Role.choices, default=Role.DEV)
+    status = models.PositiveSmallIntegerField(
+        choices=Status.choices, default=Status.INVITED
+    )
 
     class Meta:
         """

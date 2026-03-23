@@ -3,7 +3,6 @@ from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from dotenv import load_dotenv
 from rest_framework import status
 from rest_framework.exceptions import ParseError
 from rest_framework.generics import CreateAPIView
@@ -20,9 +19,6 @@ from rest_framework_simplejwt.views import (
 from core.models import EmailVerification
 from core.serializers import UserEmailVerifySerializer, UserRegisterSerializer
 from core.utils import send_verification_email
-
-load_dotenv()
-
 
 User = get_user_model()
 

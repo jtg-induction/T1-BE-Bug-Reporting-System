@@ -1,18 +1,13 @@
 import logging
-import os
 import smtplib
 from urllib.parse import urlencode, urlparse
 
 import requests
 from django.conf import settings
 from django.core.mail import EmailMessage
-from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
 from requests.auth import HTTPBasicAuth
-
-load_dotenv()
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
-if not FRONTEND_BASE_URL:
-    raise ValueError("FRONTEND_BASE_URL environment variable is not set")
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -98,24 +93,43 @@ class JiraClient:
             raise ValueError("Invalid Jira URL format.")
 
         self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        self.auth = HTTPBasicAuth(email, access_token)
-        self.headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+        self.session = requests.Session()
+        self.session.auth = HTTPBasicAuth(email, access_token)
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+        )
+
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "POST"],
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def _request(self, method, endpoint, **kwargs):
         """
         Internal helper to execute HTTP requests against the Jira API.
-        Automatically handles timeouts, JSON parsing, and standardizes error formatting.
+        Automatically handles retries, timeouts, JSON parsing, and error formatting.
         """
         url = f"{self.base_url}{endpoint}"
         response_data = None
         try:
-            response = requests.request(method, url, headers=self.headers, auth=self.auth, timeout=30, **kwargs)
+            response = self.session.request(method, url, timeout=30, **kwargs)
 
             try:
                 response_data = response.json() if response.text else {}
             except ValueError:
                 raise JiraClientException(
-                    f"Jira returned invalid JSON: {response.text[:200]}", status_code=response.status_code
+                    f"Jira returned invalid JSON: {response.text[:200]}",
+                    status_code=response.status_code,
                 )
 
             if not (200 <= response.status_code < 300):
@@ -125,7 +139,9 @@ class JiraClient:
                     else "Unknown Jira Error"
                 )
                 raise JiraClientException(
-                    f"Jira API Error: {error_msg}", status_code=response.status_code, response_data=response_data
+                    f"Jira API Error: {error_msg}",
+                    status_code=response.status_code,
+                    response_data=response_data,
                 )
 
             return response_data
