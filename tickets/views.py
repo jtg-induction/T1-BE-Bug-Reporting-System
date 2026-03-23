@@ -339,7 +339,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         if not is_admin:
             raise PermissionDenied("Only admins can move tickets to a new project.")
 
-        new_project = get_object_or_404(Project, id=new_project_id, status=1)
+        new_project = get_object_or_404(Project, id=new_project_id, status=2)
 
         is_new_admin = ProjectMember.objects.filter(
             project=new_project,
@@ -734,7 +734,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             status=ProjectMember.Status.ACTIVE,
         ).values_list("project_id", flat=True)
         compatible_projects = Project.objects.filter(
-            id__in=admin_project_ids, status=1, jira_url=current_project.jira_url
+            id__in=admin_project_ids, status=2, jira_url=current_project.jira_url
         ).exclude(id=current_project.id)
 
         serializer = self.get_serializer(compatible_projects, many=True)
