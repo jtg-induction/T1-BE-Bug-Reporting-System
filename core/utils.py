@@ -50,7 +50,14 @@ class JiraClient:
             total=3,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "POST"],
+            allowed_methods=[
+                "HEAD",
+                "GET",
+                "PUT",
+                "DELETE",
+                "OPTIONS",
+                "POST",
+            ],
         )
 
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -77,7 +84,7 @@ class JiraClient:
 
             if not (200 <= response.status_code < 300):
                 error_msg = (
-                    response_data.get("errorMessages", ["Unknown Jira Error"])[0]
+                    response_data.get("errorMessages", ["Unknown Jira Error"])
                     if isinstance(response_data, dict)
                     else "Unknown Jira Error"
                 )
@@ -90,7 +97,9 @@ class JiraClient:
             return response_data
 
         except requests.exceptions.RequestException as e:
-            raise JiraClientException(f"Network error while contacting Jira: {str(e)}")
+            raise JiraClientException(
+                f"Network error while contacting Jira: {str(e)}"
+            )
 
     def create_project(self, key, name, description, lead_account_id):
         """
@@ -103,9 +112,11 @@ class JiraClient:
             "projectTypeKey": "software",
             "leadAccountId": lead_account_id,
         }
-        return self._request("POST", "/rest/api/3/project", json=payload)
+        return self._request("POST", "/rest/api/3/project/", json=payload)
 
-    def update_project(self, key, name, description, lead_account_id, projectId):
+    def update_project(
+        self, key, name, description, lead_account_id, project_id
+    ):
         """
         Updates an existing software project in Jira using the provided configuration.
         """
@@ -116,16 +127,22 @@ class JiraClient:
             "projectTypeKey": "software",
             "leadAccountId": lead_account_id,
         }
-        return self._request("PUT", f"/rest/api/3/project/{projectId}/", json=payload)
+        return self._request(
+            "PUT", f"/rest/api/3/project/{project_id}/", json=payload
+        )
 
-    def archive_project(self, projectId):
+    def archive_project(self, project_id):
         """
         Archives a software project in Jira using the provided configuration.
         """
-        return self._request("POST", f"/rest/api/3/project/{projectId}/archive")
+        return self._request(
+            "POST", f"/rest/api/3/project/{project_id}/archive/"
+        )
 
-    def unarchive_project(self, projectId):
+    def unarchive_project(self, project_id):
         """
         Unarchives a software project in Jira using the provided configuration.
         """
-        return self._request("POST", f"/rest/api/3/project/{projectId}/restore")
+        return self._request(
+            "POST", f"/rest/api/3/project/{project_id}/restore/"
+        )

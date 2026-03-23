@@ -2,6 +2,10 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -98,7 +102,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": int(os.getenv("PAGE_SIZE", "10")),
+    "PAGE_SIZE": int(os.getenv("PAGE_SIZE", 10)),
     "DEFAULT_FILTER_BACKENDS": [
         "rest_framework.filters.OrderingFilter",
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -137,7 +141,7 @@ CELERY_TASK_SERIALIZER = os.getenv("CELERY_TASK_SERIALIZER")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
 
 CELERY_TASK_ACKS_LATE = os.getenv("CELERY_TASK_ACKS_LATE", "True").lower() in ("true", "1", "yes")
-CELERY_WORKER_PREFETCH_MULTIPLIER = os.getenv("CELERY_WORKER_PREFETCH_MULTIPLIER")
+CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_WORKER_PREFETCH_MULTIPLIER"))
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 

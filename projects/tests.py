@@ -159,7 +159,7 @@ class ProjectViewSetTestCase(APITestCase):
         response = self.client.post(self.list_url, data)
         self.assertEqual(400, response.status_code)
 
-    @patch("core.utils.requests.request")
+    @patch("core.utils.requests.Session.request")
     def test_create_project_success(self, mock_post):
         """
         Mocks a successful Jira API response and verifies the local project and member are created.
@@ -190,7 +190,7 @@ class ProjectViewSetTestCase(APITestCase):
         ).exists()
         self.assertTrue(member_exists)
 
-    @patch("core.utils.requests.request")
+    @patch("core.utils.requests.Session.request")
     def test_create_project_jira_rejection(self, mock_post):
         """
         Verifies that if Jira rejects the project creation, the local project is not saved.
@@ -213,7 +213,7 @@ class ProjectViewSetTestCase(APITestCase):
         project_exists = Project.objects.filter(key="FAIL").exists()
         self.assertFalse(project_exists)
 
-    @patch("core.utils.requests.request")
+    @patch("core.utils.requests.Session.request")
     def test_create_project_network_error(self, mock_post):
         """
         Ensures a 503 is returned and no local project is saved if the network connection to Jira fails.
@@ -259,6 +259,7 @@ class ProjectViewSetTestCase(APITestCase):
 
     @patch("requests.put")
     def test_update_project_success(self, mock_put):
+        """Verifies that an admin can successfully update project details locally and in Jira."""
         mock_put.return_value.status_code = 200
         mock_put.return_value.json.return_value = {}
 
@@ -268,12 +269,12 @@ class ProjectViewSetTestCase(APITestCase):
             url, {"title": "Updated Title", "description": "Updated Desc"}
         )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         self.active_project.refresh_from_db()
         self.assertEqual(self.active_project.title, "Updated Title")
 
     def test_update_project_not_admin(self):
-
+        """Ensures that non-admin members are forbidden from updating project details."""
         ProjectMember.objects.create(
             project=self.active_project,
             member=self.user2,
@@ -289,6 +290,7 @@ class ProjectViewSetTestCase(APITestCase):
 
     @patch("requests.put")
     def test_update_project_jira_error(self, mock_put):
+        """Validates that Jira API validation errors are correctly bubbled up as 400 Bad Request."""
         mock_put.return_value.status_code = 400
         mock_put.return_value.json.return_value = {"errorMessages": ["Some Jira error"]}
 
@@ -299,6 +301,7 @@ class ProjectViewSetTestCase(APITestCase):
 
     @patch("requests.put")
     def test_update_project_network_error(self, mock_put):
+        """Confirms that network timeouts during Jira updates result in a 503 Service Unavailable response."""
         mock_put.side_effect = RequestException("timeout")
 
         url = reverse("project-detail", args=[self.active_project.id])
@@ -308,6 +311,7 @@ class ProjectViewSetTestCase(APITestCase):
 
     @patch("requests.post")
     def test_archive_project_success(self, mock_post):
+        """Verifies successful project archiving in both the local database and Jira."""
         mock_post.return_value.status_code = 204
 
         url = reverse("project-archive-project", args=[self.active_project.id])
@@ -318,12 +322,14 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(self.active_project.status, Project.Status.ARCHIVED)
 
     def test_archive_already_archived(self):
+        """Ensures that attempting to archive an already archived project returns a 400 error."""
         url = reverse("project-archive-project", args=[self.archived_project.id])
         response = self.client.post(url)
 
         self.assertEqual(response.status_code, 400)
 
     def test_archive_not_admin(self):
+        """Ensures that users without admin privileges cannot archive projects."""
         self.client.force_authenticate(self.user2)
 
         url = reverse("project-archive-project", args=[self.active_project.id])
@@ -333,6 +339,7 @@ class ProjectViewSetTestCase(APITestCase):
 
     @patch("requests.post")
     def test_unarchive_project_success(self, mock_post):
+        """Verifies successful restoration of an archived project locally and in Jira."""
         mock_post.return_value.status_code = 200
 
         url = reverse("project-unarchive-project", args=[self.archived_project.id])
@@ -343,6 +350,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(self.archived_project.status, Project.Status.ACTIVE)
 
     def test_get_all_members_success(self):
+        """Confirms that an authorized user can retrieve the full list of project members."""
         url = reverse("project-get-all-members", args=[self.active_project.id])
         response = self.client.get(url)
 
@@ -350,6 +358,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertTrue(len(response.data) >= 1)
 
     def test_get_members_not_in_project(self):
+        """Ensures users cannot view membership lists for projects they belong to."""
         self.client.force_authenticate(self.user2)
 
         url = reverse("project-get-all-members", args=[self.active_project.id])
@@ -358,12 +367,14 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_get_available_members_success(self):
+        """Verifies that admins can retrieve a list of users available to be invited to the project."""
         url = reverse("project-get-available-members", args=[self.active_project.id])
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)
 
     def test_get_available_members_not_admin(self):
+        """Ensures only admins can access the list of potential project invitees."""
         self.client.force_authenticate(self.user2)
 
         url = reverse("project-get-available-members", args=[self.active_project.id])
@@ -372,6 +383,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_invite_member_success(self):
+        """Validates that an admin can successfully invite a new user to a project."""
         url = reverse("project-invite-member", args=[self.active_project.id])
 
         response = self.client.post(
@@ -387,6 +399,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertTrue(exists)
 
     def test_accept_invite_success(self):
+        """Confirms that a user can successfully accept a pending project invitation."""
         ProjectMember.objects.create(
             project=self.active_project,
             member=self.user2,
@@ -407,6 +420,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(pm.status, ProjectMember.Status.ACTIVE)
 
     def test_reject_invite_success(self):
+        """Confirms that a user can successfully reject a pending project invitation."""
         ProjectMember.objects.create(
             project=self.active_project,
             member=self.user2,
@@ -427,6 +441,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(pm.status, ProjectMember.Status.REJECTED)
 
     def test_revoke_member_success(self):
+        """Verifies that an admin can successfully revoke a user's membership from a project."""
         ProjectMember.objects.create(
             project=self.active_project,
             member=self.user2,
@@ -446,6 +461,7 @@ class ProjectViewSetTestCase(APITestCase):
         self.assertEqual(pm.status, ProjectMember.Status.REVOKED)
 
     def test_change_role_success(self):
+        """Validates that an admin can successfully change the role of another project member."""
         ProjectMember.objects.create(
             project=self.active_project,
             member=self.user2,
@@ -456,10 +472,10 @@ class ProjectViewSetTestCase(APITestCase):
 
         url = reverse("project-change-role", args=[self.active_project.id])
 
-        response = self.client.post(url, {"user_id": self.user2.id, "role": 1})
+        response = self.client.post(url, {"user_id": self.user2.id, "role": 2})
 
         self.assertEqual(response.status_code, 200)
 
         pm = ProjectMember.objects.get(project=self.active_project, member=self.user2)
 
-        self.assertEqual(pm.role, ProjectMember.Role.ADMIN)
+        self.assertEqual(pm.role, ProjectMember.Role.ADMIN.value)

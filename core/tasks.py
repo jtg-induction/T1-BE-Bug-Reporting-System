@@ -1,9 +1,10 @@
 import os
+from html import escape
 from urllib.parse import urlencode
 
 from celery import shared_task
 from django.core.mail import EmailMessage
-from html import escape
+
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
 
 

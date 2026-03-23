@@ -4,7 +4,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import ParseError
+from rest_framework.exceptions import NotAuthenticated, ParseError
 from rest_framework.generics import CreateAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
