@@ -1,18 +1,16 @@
-import os
 from html import escape
 from urllib.parse import urlencode
 
 from celery import shared_task
+from django.conf import settings
 from django.core.mail import EmailMessage
-
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
 
 
 @shared_task(bind=True, max_retries=3)
 def send_verification_email(self, email, token):
 
     params = urlencode({"token": str(token), "email": email})
-    verification_url = f"{FRONTEND_BASE_URL}/signup/complete?{params}"
+    verification_url = f"{settings.FRONTEND_BASE_URL}/signup/complete?{params}"
 
     subject = "Let's get you started!"
 
@@ -46,9 +44,7 @@ def send_verification_email(self, email, token):
 </table>
     """
 
-    email_message = EmailMessage(
-        subject=subject, body=html_content, to=[email]
-    )
+    email_message = EmailMessage(subject=subject, body=html_content, to=[email])
 
     email_message.content_subtype = "html"
     try:
@@ -60,8 +56,8 @@ def send_verification_email(self, email, token):
 @shared_task(bind=True, max_retries=3)
 def send_invitation_email(self, pid, title, email):
 
-    accept_url = f"{FRONTEND_BASE_URL}/projects/{pid}/accept"
-    reject_url = f"{FRONTEND_BASE_URL}/projects/{pid}/reject"
+    accept_url = f"{settings.FRONTEND_BASE_URL}/projects/{pid}/accept"
+    reject_url = f"{settings.FRONTEND_BASE_URL}/projects/{pid}/reject"
     safe_title = escape(title)
     subject = "Ready for a new Journey?"
 
@@ -98,9 +94,7 @@ def send_invitation_email(self, pid, title, email):
 </table>
     """
 
-    email_message = EmailMessage(
-        subject=subject, body=html_content, to=[email]
-    )
+    email_message = EmailMessage(subject=subject, body=html_content, to=[email])
 
     email_message.content_subtype = "html"
     try:
