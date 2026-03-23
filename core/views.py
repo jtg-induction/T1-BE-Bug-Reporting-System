@@ -4,7 +4,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import ParseError
+from rest_framework.exceptions import NotAuthenticated, ParseError
 from rest_framework.generics import CreateAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -18,7 +18,7 @@ from rest_framework_simplejwt.views import (
 
 from core.models import EmailVerification
 from core.serializers import UserEmailVerifySerializer, UserRegisterSerializer
-from core.utils import send_verification_email
+from core.tasks import send_verification_email
 
 User = get_user_model()
 
@@ -64,24 +64,11 @@ class CustomTokenRefreshView(TokenRefreshView):
         refresh = request.COOKIES.get("refresh")
 
         if refresh is None:
-            return Response(
-                {"detail": "No refresh token"}, status=status.HTTP_401_UNAUTHORIZED
-            )
+            raise NotAuthenticated("No refresh token")
 
         request.data["refresh"] = refresh
 
         response = super().post(request, *args, **kwargs)
-
-        if "refresh" in response.data:
-            new_refresh = response.data.pop("refresh")
-            response.set_cookie(
-                key="refresh",
-                value=new_refresh,
-                httponly=True,
-                secure=SECURE,
-                samesite="Strict",
-                path="/api/",
-            )
         return response
 
 
@@ -97,9 +84,7 @@ class CustomTokenBlacklistView(TokenBlacklistView):
         refresh = request.COOKIES.get("refresh")
 
         if refresh is None:
-            return Response(
-                {"detail": "No refresh token"}, status=status.HTTP_401_UNAUTHORIZED
-            )
+            raise NotAuthenticated("No refresh token")
 
         request.data["refresh"] = refresh
         response = super().post(request, *args, **kwargs)
@@ -169,9 +154,7 @@ class EmailVerifyTokenGenerateAPIView(APIView):
             else:
                 verify_token.verification_token = uuid4()
                 verify_token.save(update_fields=["verification_token"])
-                send_verification_email(
-                    email=email, token=verify_token.verification_token
-                )
+                send_verification_email.delay(email, verify_token.verification_token)
                 return Response(
                     {"detail": "Mail sent to your email"}, status=status.HTTP_200_OK
                 )
@@ -179,7 +162,7 @@ class EmailVerifyTokenGenerateAPIView(APIView):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         verification = serializer.save()
-        send_verification_email(email=email, token=verification.verification_token)
+        send_verification_email.delay(email, verification.verification_token)
         return Response(
             {"detail": "Mail sent to your email"}, status=status.HTTP_200_OK
         )

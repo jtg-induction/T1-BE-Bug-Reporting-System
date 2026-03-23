@@ -13,8 +13,8 @@ class Project(BaseModel):
     """
 
     class Status(models.IntegerChoices):
-        ARCHIVED = 0, ("Archived")
-        ACTIVE = 1, ("Active")
+        ARCHIVED = 1, ("Archived")
+        ACTIVE = 2, ("Active")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=100)
@@ -51,14 +51,14 @@ class ProjectMember(BaseModel):
     """
 
     class Role(models.IntegerChoices):
-        DEV = 0, ("Developer")
-        ADMIN = 1, ("Admin")
+        DEV = 1, ("Developer")
+        ADMIN = 2, ("Admin")
 
     class Status(models.IntegerChoices):
-        INVITED = 0, ("Invited")
-        ACTIVE = 1, ("Active")
-        REVOKED = 2, ("Revoked")
-        REJECTED = 3, ("Rejected")
+        INVITED = 1, ("Invited")
+        ACTIVE = 2, ("Active")
+        REVOKED = 3, ("Revoked")
+        REJECTED = 4, ("Rejected")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(

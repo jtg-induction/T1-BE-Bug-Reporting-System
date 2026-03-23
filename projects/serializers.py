@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from .models import Project
+from projects.models import Project, ProjectMember
+from users.serializers import UserSerializer
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -17,7 +18,17 @@ class ProjectSerializer(serializers.ModelSerializer):
         """
 
         model = Project
-        fields = ["id", "title", "description", "status", "key", "jira_url", "jira_project_id", "project_role", "owner"]
+        fields = [
+            "id",
+            "title",
+            "description",
+            "status",
+            "key",
+            "jira_url",
+            "jira_project_id",
+            "project_role",
+            "owner",
+        ]
         read_only_fields = ["id", "jira_project_id", "project_role", "owner"]
 
     def get_project_role(self, obj):
@@ -41,12 +52,25 @@ class ProjectSerializer(serializers.ModelSerializer):
 
             for field in unchangeable_fields:
                 if field in data:
-                    raise serializers.ValidationError({field: "This field cannot be updated."})
+                    raise serializers.ValidationError(
+                        {field: "This field cannot be updated."}
+                    )
 
         else:
             required_jira_fields = ["key", "title", "jira_url", "description"]
             for field in required_jira_fields:
                 if not data.get(field):
-                    raise serializers.ValidationError({field: "This field is required when creating a new project."})
+                    raise serializers.ValidationError(
+                        {field: "This field is required when creating a new project."}
+                    )
 
         return data
+
+
+class ProjectMemberSerializer(serializers.ModelSerializer):
+    member = UserSerializer()
+
+    class Meta:
+        model = ProjectMember
+        fields = ["id", "member", "role"]
+        read_only_fields = ["member", "id"]

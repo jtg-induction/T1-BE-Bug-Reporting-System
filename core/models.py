@@ -15,9 +15,17 @@ class SafeDeleteQuerySet(models.QuerySet):
 
     def delete(self, using=None, keep_parents=False):
         """
-        Updates the isDeleted flag to True instead of removing records.
+        Bulk soft-delete that also triggers bulk soft-delete on related models.
         """
-        self.update(isDeleted=True)
+        for relation in self.model._meta.related_objects:
+            if relation.on_delete == models.CASCADE:
+                if hasattr(relation.related_model, "isDeleted"):
+                    related_queryset = relation.related_model.objects.filter(
+                        **{f"{relation.remote_field.name}__in": self}
+                    )
+                    related_queryset.delete()
+
+        return self.update(isDeleted=True, updated_at=timezone.now())
 
     def hard_delete(self, using=None, keep_parents=False):
         """
@@ -66,6 +74,14 @@ class BaseModel(models.Model):
         """
         self.isDeleted = True
         self.save(update_fields=["isDeleted", "updated_at"], using=using)
+        for related_object in self._meta.related_objects:
+            if related_object.on_delete == models.CASCADE and issubclass(
+                related_object.related_model, BaseModel
+            ):
+                related_queryset = getattr(
+                    self, related_object.get_accessor_name()
+                ).all()
+                related_queryset.delete()
 
     def hard_delete(self, using=None, keep_parents=False):
         """
