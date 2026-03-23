@@ -133,9 +133,7 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, request.user.email, access_token)
         except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             with transaction.atomic():
@@ -206,9 +204,7 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, request.user.email, access_token)
         except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             with transaction.atomic():
@@ -410,9 +406,7 @@ class ProjectViewSet(
                             status=status.HTTP_200_OK,
                         )
                 else:
-                    raise PermissionDenied(
-                        "Admins can be removed by owner only"
-                    )
+                    raise PermissionDenied("Admins can be removed by owner only")
             else:
                 pm_instance = ProjectMember.objects.filter(
                     project__id=pk, member=member
@@ -454,12 +448,8 @@ class ProjectViewSet(
         if not role:
             raise ParseError("Provide a Role for this user")
 
-        pm_admin = ProjectMember.objects.filter(
-            member=admin, project=project
-        ).first()
-        pm_member = ProjectMember.objects.filter(
-            member=member, project=project
-        ).first()
+        pm_admin = ProjectMember.objects.filter(member=admin, project=project).first()
+        pm_member = ProjectMember.objects.filter(member=member, project=project).first()
 
         if role == ProjectMember.Role.ADMIN.value:
             if project.owner == admin:
@@ -477,10 +467,7 @@ class ProjectViewSet(
                 raise PermissionDenied("You are not the owner of this project")
 
         if pm_admin.role == ProjectMember.Role.ADMIN:
-            if (
-                pm_member.role == ProjectMember.Role.ADMIN
-                and project.owner != admin
-            ):
+            if pm_member.role == ProjectMember.Role.ADMIN and project.owner != admin:
                 raise ParseError("Can't change role of another admin")
 
             else:
@@ -519,14 +506,10 @@ class ProjectViewSet(
         members = self.filter_queryset(members)
         page = self.paginate_queryset(members)
         if page is not None:
-            serializer = self.get_serializer(
-                page, many=True, context={"user": user}
-            )
+            serializer = self.get_serializer(page, many=True, context={"user": user})
             return self.get_paginated_response(serializer.data)
 
-        serializer = self.get_serializer(
-            members, many=True, context={"user": user}
-        )
+        serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="available_members")
@@ -545,9 +528,7 @@ class ProjectViewSet(
             user_projects__status=ProjectMember.Status.ACTIVE,
         )
 
-        serializer = self.get_serializer(
-            members, many=True, context={"user": user}
-        )
+        serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="archive")
@@ -602,9 +583,7 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, user.email, access_token)
         except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             with transaction.atomic():
                 project.status = new_status
@@ -658,9 +637,7 @@ class ProjectViewSet(
         base_qs = Ticket.objects.filter(project__id=pk)
 
         user_ids_raw = query.get("user-ids", "")
-        uuid_pattern = (
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        )
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
         user_ids = re.findall(uuid_pattern, user_ids_raw.lower())
         if user_ids:
             base_qs = base_qs.filter(assignee__id__in=user_ids)
@@ -669,7 +646,7 @@ class ProjectViewSet(
         end_date = query.get("end-date")
         section = query.get("section")
 
-        if start_date and end_date and start_date>end_date:
+        if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
 
         if not start_date and not end_date:
@@ -723,9 +700,7 @@ class ProjectViewSet(
                 created_qs = created_qs.filter(created_at__date__lte=end_dt)
 
             if not section:
-                timeline = now - timedelta(
-                    seconds=locals().get("history_time", 86400)
-                )
+                timeline = now - timedelta(seconds=locals().get("history_time", 86400))
                 data["ticket_summary"] = created_qs.aggregate(
                     completed=Count("id", filter=Q(status=4)),
                     missed_deadline=Count(
@@ -769,22 +744,14 @@ class ProjectViewSet(
         ).exists():
             raise PermissionDenied("You are not an Admin of this Project")
 
-        user_ids = (
-            query.get("user-ids")
-            if query and query.get("user-ids")
-            else ""
-        )
+        user_ids = query.get("user-ids") if query and query.get("user-ids") else ""
         start_date = (
-            query.get("start-date")
-            if query and query.get("start-date")
-            else None
+            query.get("start-date") if query and query.get("start-date") else None
         )
-        end_date = (
-            query.get("end-date") if query and query.get("end-date") else None
-        )
-        if start_date and end_date and start_date>end_date:
+        end_date = query.get("end-date") if query and query.get("end-date") else None
+        if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-        
+
         project_key = Project.objects.filter(id=pk).values_list("key")
         report_generator = ReportGenerator()
         buffer = report_generator.generate_project_report(
