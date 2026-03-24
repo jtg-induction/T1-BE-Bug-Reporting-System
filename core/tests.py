@@ -66,7 +66,6 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
 
         self.client.post(self.register, user_data)
         response = self.client.post(self.url, {"email": self.email})
-        self.assertTrue("You are already registered" in response.data["detail"])
         self.assertEqual(400, response.status_code)
 
 

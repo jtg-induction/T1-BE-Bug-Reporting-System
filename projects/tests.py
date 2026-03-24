@@ -122,8 +122,7 @@ class ProjectViewSetTestCase(APITestCase):
         response = self.client.get(self.list_url)
         self.assertEqual(200, response.status_code)
 
-        actual_data = self._get_actual_data(response)
-
+        actual_data = self._get_actual_data(response).get("results")
         self.assertEqual(len(actual_data), 1)
         self.assertEqual(actual_data[0]["id"], str(self.active_project.id))
 
@@ -134,7 +133,7 @@ class ProjectViewSetTestCase(APITestCase):
         response = self.client.get(self.archived_url)
         self.assertEqual(200, response.status_code)
 
-        actual_data = self._get_actual_data(response)
+        actual_data = self._get_actual_data(response).get("results")
 
         self.assertEqual(len(actual_data), 1)
         self.assertEqual(actual_data[0]["id"], str(self.archived_project.id))
@@ -253,11 +252,11 @@ class ProjectViewSetTestCase(APITestCase):
         response = self.client.get(self.list_url)
         self.assertEqual(200, response.status_code)
 
-        actual_data = self._get_actual_data(response)
+        actual_data = self._get_actual_data(response).get("results")
 
         self.assertEqual(len(actual_data), 0)
 
-    @patch("requests.put")
+    @patch("requests.Session.request")
     def test_update_project_success(self, mock_put):
         """Verifies that an admin can successfully update project details locally and in Jira."""
         mock_put.return_value.status_code = 200
@@ -288,7 +287,7 @@ class ProjectViewSetTestCase(APITestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    @patch("requests.put")
+    @patch("requests.Session.request")
     def test_update_project_jira_error(self, mock_put):
         """Validates that Jira API validation errors are correctly bubbled up as 400 Bad Request."""
         mock_put.return_value.status_code = 400
@@ -299,7 +298,7 @@ class ProjectViewSetTestCase(APITestCase):
 
         self.assertEqual(response.status_code, 400)
 
-    @patch("requests.put")
+    @patch("requests.Session.request")
     def test_update_project_network_error(self, mock_put):
         """Confirms that network timeouts during Jira updates result in a 503 Service Unavailable response."""
         mock_put.side_effect = RequestException("timeout")
@@ -309,7 +308,7 @@ class ProjectViewSetTestCase(APITestCase):
 
         self.assertEqual(response.status_code, 503)
 
-    @patch("requests.post")
+    @patch("requests.Session.request")
     def test_archive_project_success(self, mock_post):
         """Verifies successful project archiving in both the local database and Jira."""
         mock_post.return_value.status_code = 204
@@ -337,7 +336,7 @@ class ProjectViewSetTestCase(APITestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    @patch("requests.post")
+    @patch("requests.Session.request")
     def test_unarchive_project_success(self, mock_post):
         """Verifies successful restoration of an archived project locally and in Jira."""
         mock_post.return_value.status_code = 200
