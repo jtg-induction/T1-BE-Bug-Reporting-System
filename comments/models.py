@@ -28,7 +28,7 @@ class Comment(BaseModel):
 
     author_name = models.CharField(max_length=100, blank=True)
 
-    jira_id = models.CharField(max_length=255)
+    jira_id = models.CharField(max_length=255, unique=True)
 
     class Meta:
         ordering = ["-created_at"]
