@@ -645,41 +645,47 @@ class JiraClient:
 
 
 class ReportGenerator:
-    def generate_project_report(
-        self, project_key, project_id, start_date=None, end_date=None, user_ids_raw=""
-    ):
+    def __init__(self, start_date=None, end_date=None):
+
         filter_date_format = "%Y-%m-%d"
         now = timezone.now()
 
-        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
-
-        base_qs = Ticket.objects.filter(project_id=project_id)
-        if user_ids:
-            base_qs = base_qs.filter(assignee__id__in=user_ids)
-
         if not start_date and not end_date:
-            start_dt = (now - timedelta(days=now.weekday())).date()
-            end_dt = now.date()
+            self.start_dt = (now - timedelta(days=now.weekday())).date()
+            self.end_dt = (now + timedelta(days=6-now.weekday())).date()
         else:
-            start_dt = (
+            self.start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
                 if start_date
                 else None
             )
-            end_dt = (
+            self.end_dt = (
                 datetime.strptime(end_date, filter_date_format).date()
                 if end_date
                 else None
             )
+        pass
 
-        created_qs = base_qs
-        if start_dt:
-            created_qs = created_qs.filter(created_at__date__gte=start_dt)
-        if end_dt:
-            created_qs = created_qs.filter(created_at__date__lte=end_dt)
+    def generate_project_report(
+        self, project_key, project_id, user_ids_raw=""
+    ):
+        now = timezone.now()
 
-        summary_metrics = created_qs.aggregate(
+        uuid_pattern = (
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        )
+        self.user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
+
+        base_qs = Ticket.objects.filter(project_id=project_id)
+        if self.user_ids:
+            base_qs = base_qs.filter(assignee__id__in=self.user_ids)
+
+        if self.start_dt:
+            base_qs = base_qs.filter(deadline__date__gte=self.start_dt)
+        if self.end_dt:
+            base_qs = base_qs.filter(deadline__date__lte=self.end_dt)
+
+        summary_metrics = base_qs.aggregate(
             completed=Count("id", filter=Q(status=4)),
             total=Count("id"),
             missed_deadline=Count("id", filter=Q(deadline__lt=now) & ~Q(status=4)),
@@ -693,14 +699,8 @@ class ReportGenerator:
             highest=Count("id", filter=Q(severity=5)),
         )
 
-        deadline_qs = base_qs.filter(deadline__isnull=False)
-        if start_dt:
-            deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
-        if end_dt:
-            deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
-
         deadline_trend = (
-            deadline_qs.annotate(day=TruncDay("deadline"))
+            base_qs.annotate(day=TruncDay("deadline"))
             .values("day")
             .annotate(
                 missed=Count(
@@ -708,7 +708,9 @@ class ReportGenerator:
                     filter=Q(closed_at__date__gt=F("deadline__date"))
                     | Q(closed_at__isnull=True, deadline__lt=now),
                 ),
-                on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
+                on_time=Count(
+                    "id", filter=Q(closed_at__date=F("deadline__date"))
+                ),
                 before_time=Count(
                     "id", filter=Q(closed_at__date__lt=F("deadline__date"))
                 ),
@@ -749,7 +751,7 @@ class ReportGenerator:
         )
         story.append(
             Paragraph(
-                f"Filter Period: {start_dt or 'All'} to {end_dt or 'Now'}",
+                f"Filter Period: {self.start_dt or 'All'} to {self.end_dt or 'Now'}",
                 styles["Normal"],
             )
         )
@@ -844,35 +846,47 @@ class ReportGenerator:
                 "Closed At",
             ]
         ]
-        for i, t in enumerate(created_qs, 1):
+        for i, t in enumerate(base_qs, 1):
+            title = Paragraph(t.title, style=styles["Normal"])
+            key = Paragraph(
+                t.jira_key if t.jira_key else "-", style=styles["Normal"]
+            )
+            assignee = Paragraph(
+                f"{t.assignee.first_name} {t.assignee.last_name}"
+                if t.assignee
+                else "Unassigned",
+                style=styles["Normal"],
+            )
+            reporter = Paragraph(
+                f"{t.reporter.first_name} {t.reporter.last_name}",
+                style=styles["Normal"],
+            )
             t_log_data.append(
                 [
                     i,
-                    (t.title[:15] + "..") if len(t.title) > 17 else t.title,
-                    t.jira_key or "-",
-                    f"{t.assignee.first_name[0]}. {t.assignee.last_name}"
-                    if t.assignee
-                    else "N/A",
-                    f"{t.reporter.first_name[0]}. {t.reporter.last_name}",
+                    title,
+                    key,
+                    assignee,
+                    reporter,
                     t.updated_at.strftime("%y-%m-%d") if t.updated_at else "-",
                     t.get_status_display(),
                     t.get_severity_display(),
-                    t.deadline.strftime("%y-%m-%d") if t.deadline else "No Deadline",
+                    t.deadline.strftime("%y-%m-%d") if t.deadline else "-",
                     t.closed_at.strftime("%y-%m-%d") if t.closed_at else "-",
                 ]
             )
 
         log_widths = [
             0.3 * inch,
-            1.3 * inch,
-            0.6 * inch,
-            0.9 * inch,
             0.9 * inch,
             0.6 * inch,
-            0.6 * inch,
-            0.4 * inch,
-            0.65 * inch,
-            0.65 * inch,
+            0.95 * inch,
+            0.95 * inch,
+            0.7 * inch,
+            0.7 * inch,
+            0.7 * inch,
+            0.7 * inch,
+            0.7 * inch,
         ]
         story.append(get_table_or_nodata(t_log_data, log_widths, "#34495E"))
 
@@ -888,34 +902,24 @@ class ReportGenerator:
         buffer.seek(0)
         return buffer
 
-    def generate_user_performance_report(self, user, start_date=None, end_date=None):
-        filter_date_format = "%Y-%m-%d"
-        now = timezone.now()
+    def generate_user_performance_report(self, user):
 
-        if not start_date and not end_date:
-            start_dt = (now - timedelta(days=now.weekday())).date()
-            end_dt = now.date()
-        else:
-            start_dt = (
-                datetime.strptime(start_date, filter_date_format).date()
-                if start_date
-                else None
-            )
-            end_dt = (
-                datetime.strptime(end_date, filter_date_format).date()
-                if end_date
-                else None
-            )
+        now = timezone.now()
 
         initial_queryset = Ticket.objects.filter(assignee=user)
 
-        created_qs = initial_queryset
-        if start_dt:
-            created_qs = created_qs.filter(created_at__date__gte=start_dt)
-        if end_dt:
-            created_qs = created_qs.filter(created_at__date__lte=end_dt)
+        if self.start_dt:
+            initial_queryset = initial_queryset.filter(
+                deadline__date__gte=self.start_dt
+            )
+        if self.end_dt:
+            initial_queryset = initial_queryset.filter(
+                deadline__date__lte=self.end_dt
+            )
 
-        metrics = created_qs.aggregate(
+        deadline_qs = initial_queryset.filter(deadline__isnull=False)
+
+        metrics = initial_queryset.aggregate(
             open=Count("id", filter=Q(status=1)),
             in_progress=Count("id", filter=Q(status=2)),
             resolved=Count("id", filter=Q(status=3)),
@@ -928,12 +932,6 @@ class ReportGenerator:
             highest=Count("id", filter=Q(severity=5)),
         )
 
-        deadline_qs = initial_queryset.filter(deadline__isnull=False)
-        if start_dt:
-            deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
-        if end_dt:
-            deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
-
         deadline_trend = (
             deadline_qs.annotate(day=TruncDay("deadline"))
             .values("day")
@@ -943,7 +941,9 @@ class ReportGenerator:
                     filter=Q(closed_at__date__gt=F("deadline__date"))
                     | Q(closed_at__isnull=True, deadline__lt=now),
                 ),
-                on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
+                on_time=Count(
+                    "id", filter=Q(closed_at__date=F("deadline__date"))
+                ),
                 before_time=Count(
                     "id", filter=Q(closed_at__date__lt=F("deadline__date"))
                 ),
@@ -987,7 +987,7 @@ class ReportGenerator:
         )
         story.append(
             Paragraph(
-                f"Reporting Period: {start_dt or 'All'} to {end_dt or 'Now'}",
+                f"Reporting Period: {self.start_dt or 'All'} to {self.end_dt or 'Now'}",
                 styles["Normal"],
             )
         )
@@ -1060,7 +1060,7 @@ class ReportGenerator:
         story.append(Paragraph("4. Detailed Task Log", sub_style))
         log_data = [["SN", "Ticket", "Key", "Status", "Severity", "Deadline"]]
 
-        for i, t in enumerate(created_qs, 1):
+        for i, t in enumerate(initial_queryset, 1):
             log_data.append(
                 [
                     i,

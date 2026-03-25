@@ -63,7 +63,7 @@ class UserAPIViewSet(
 
     @action(detail=False, methods=["get"], url_path="tickets-summary")
     def tickets_summary(self, request):
-        timeline = timezone.now() - timedelta(seconds=history_time)
+        timeline = timezone.now() + timedelta(seconds=history_time)
         summary = Ticket.objects.filter(assignee=request.user).aggregate(
             completed=Count("id", filter=Q(status=4)),
             missed_deadline=Count(
@@ -93,8 +93,8 @@ class UserAPIViewSet(
             raise ParseError("Invalid Date Filters")
 
         if not start_date and not end_date:
-            start_dt = (now - timedelta(days=now.weekday())).date()
-            end_dt = now.date()
+            start_dt = (now - timedelta(days=now.weekday() + 1)).date()
+            end_dt = (now + timedelta(days=6 - now.weekday())).date() 
         else:
             start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
@@ -107,14 +107,12 @@ class UserAPIViewSet(
                 else None
             )
 
+        initial_queryset.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt)
+
         data = {}
 
         if not section or section == "deadline":
             deadline_qs = initial_queryset.filter(deadline__isnull=False)
-            if start_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
-            if end_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
 
             data["deadline_chart"] = (
                 deadline_qs.annotate(day=TruncDay("deadline"))
@@ -137,10 +135,6 @@ class UserAPIViewSet(
 
         if not section or section in ["status", "priority"]:
             created_qs = initial_queryset
-            if start_dt:
-                created_qs = created_qs.filter(created_at__date__gte=start_dt)
-            if end_dt:
-                created_qs = created_qs.filter(created_at__date__lte=end_dt)
 
             if not section or section == "status":
                 data["ticket_status"] = created_qs.aggregate(
@@ -179,11 +173,9 @@ class UserAPIViewSet(
         )
         if start_date and end_date and start_date>end_date:
             raise ParseError("Invalid Date Filters")
-        report_generator = ReportGenerator()
+        report_generator = ReportGenerator(start_date=start_date, end_date=end_date)
         buffer = report_generator.generate_user_performance_report(
             user=user,
-            start_date=start_date,
-            end_date=end_date,
         )
         return FileResponse(
             buffer,

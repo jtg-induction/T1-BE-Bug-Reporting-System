@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
-from django.db import models, transaction
+from django.db import transaction
 from django.db.models import Count, F, Q, Subquery
 from django.db.models.functions import TruncDay
 from django.http import FileResponse
@@ -15,6 +15,7 @@ from rest_framework.exceptions import NotFound, ParseError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.constants import history_time
 from core.tasks import send_invitation_email
 from core.utils import JiraClient, JiraClientException, ReportGenerator
 from projects.filters import ProjectFilter, ProjectMemberFilter
@@ -80,24 +81,8 @@ class ProjectViewSet(
         Retrieves projects where the user is an active member.
         Supports filtering by 'archived' status via query parameters.
         """
-        archive_filter = models.Q(
-            status=Project.Status.ARCHIVED,
-            project_members__role=ProjectMember.Role.ADMIN,
-            project_members__member=self.request.user,
-            project_members__status=ProjectMember.Status.ACTIVE,
-        )
-        active_filter = models.Q(
-            status=Project.Status.ACTIVE,
-            project_members__member=self.request.user,
-            project_members__status=ProjectMember.Status.ACTIVE,
-        )
         projects = Project.objects.distinct()
-        project_status = self.request.GET.get("status", None)
-        if self.action == "retrieve":
-            return projects.filter(archive_filter | active_filter)
-        elif self.action == "list" and project_status == "archived":
-            return projects.filter(archive_filter)
-        return projects.filter(active_filter)
+        return projects
 
     def get_permissions(self):
         """
@@ -211,20 +196,20 @@ class ProjectViewSet(
             super().update(request, *args, **kwargs)
 
             jira_client.update_project(
-                    key=key,
-                    name=title,
-                    description=description,
-                    lead_account_id=request.user.jiraID,
-                    project_id=instance.jira_project_id,
-                )
+                key=key,
+                name=title,
+                description=description,
+                lead_account_id=request.user.jiraID,
+                project_id=instance.jira_project_id,
+            )
 
             response_serializer = ProjectSerializer(
-                    instance, context={"request": request}
-                )
+                instance, context={"request": request}
+            )
             return Response(
-                    response_serializer.data,
-                    status=status.HTTP_200_OK,
-                )
+                response_serializer.data,
+                status=status.HTTP_200_OK,
+            )
 
         except JiraClientException as e:
             status_code = (
@@ -659,8 +644,8 @@ class ProjectViewSet(
             raise ParseError("Invalid Date Filters")
 
         if not start_date and not end_date:
-            start_dt = (now - timedelta(days=now.weekday())).date()
-            end_dt = now.date()
+            start_dt = (now - timedelta(days=now.weekday() + 1)).date()
+            end_dt = (now + timedelta(days=6 - now.weekday())).date()
         else:
             start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
@@ -675,12 +660,24 @@ class ProjectViewSet(
 
         data = {}
 
-        if not section or section == "deadline":
+        if not section:
+            timeline = now + timedelta(seconds=history_time)
+            data["ticket_summary"] = base_qs.aggregate(
+                completed=Count("id", filter=Q(status=4)),
+                missed_deadline=Count(
+                    "id", filter=Q(deadline__lt=now) & ~Q(status=4)
+                ),
+                total=Count("id"),
+                near_deadline=Count(
+                    "id",
+                    filter=Q(deadline__gte=now, deadline__lte=timeline),
+                ),
+            )
+
+        base_qs = base_qs.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt)
+
+        if not section or section in ["deadline"]:
             deadline_qs = base_qs.filter(deadline__isnull=False)
-            if start_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
-            if end_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
 
             data["deadline_chart"] = (
                 deadline_qs.annotate(day=TruncDay("deadline"))
@@ -703,24 +700,6 @@ class ProjectViewSet(
 
         if not section or section in ["status", "priority"]:
             created_qs = base_qs
-            if start_dt:
-                created_qs = created_qs.filter(created_at__date__gte=start_dt)
-            if end_dt:
-                created_qs = created_qs.filter(created_at__date__lte=end_dt)
-
-            if not section:
-                timeline = now - timedelta(seconds=locals().get("history_time", 86400))
-                data["ticket_summary"] = created_qs.aggregate(
-                    completed=Count("id", filter=Q(status=4)),
-                    missed_deadline=Count(
-                        "id", filter=Q(deadline__lt=now) & ~Q(status=4)
-                    ),
-                    total=Count("id"),
-                    near_deadline=Count(
-                        "id",
-                        filter=Q(deadline__gte=now, deadline__lte=timeline),
-                    ),
-                )
 
             if not section or section == "status":
                 data["ticket_status"] = created_qs.aggregate(
@@ -761,14 +740,14 @@ class ProjectViewSet(
         if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
 
-        project_key = Project.objects.filter(id=pk).values_list("key")
-        report_generator = ReportGenerator()
+        project_key = Project.objects.get(id=pk).key
+        report_generator = ReportGenerator(
+            start_date=start_date, end_date=end_date
+        )
         buffer = report_generator.generate_project_report(
             user_ids_raw=user_ids,
             project_key=project_key,
             project_id=pk,
-            start_date=start_date,
-            end_date=end_date,
         )
         return FileResponse(
             buffer,
