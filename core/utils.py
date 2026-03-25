@@ -415,9 +415,7 @@ class JiraClient:
         }
         return self._request("POST", "/rest/api/3/project/", json=payload)
 
-    def update_project(
-        self, key, name, description, lead_account_id, project_id
-    ):
+    def update_project(self, key, name, description, lead_account_id, project_id):
         """
         Updates an existing software project in Jira using the provided configuration.
         """
@@ -428,25 +426,19 @@ class JiraClient:
             "projectTypeKey": "software",
             "leadAccountId": lead_account_id,
         }
-        return self._request(
-            "PUT", f"/rest/api/3/project/{project_id}/", json=payload
-        )
+        return self._request("PUT", f"/rest/api/3/project/{project_id}/", json=payload)
 
     def archive_project(self, project_id):
         """
         Archives a software project in Jira using the provided configuration.
         """
-        return self._request(
-            "POST", f"/rest/api/3/project/{project_id}/archive/"
-        )
+        return self._request("POST", f"/rest/api/3/project/{project_id}/archive/")
 
     def unarchive_project(self, project_id):
         """
         Unarchives a software project in Jira using the provided configuration.
         """
-        return self._request(
-            "POST", f"/rest/api/3/project/{project_id}/restore/"
-        )
+        return self._request("POST", f"/rest/api/3/project/{project_id}/restore/")
 
     def create_ticket(
         self,
@@ -456,6 +448,7 @@ class JiraClient:
         severity=None,
         assignee_id=None,
         deadline=None,
+        status=None,
     ):
         """
         Creates a new ticket (issue) in the specified Jira project.
@@ -491,7 +484,12 @@ class JiraClient:
             fields["duedate"] = deadline
 
         payload = {"fields": fields}
-        return self._request("POST", "/rest/api/3/issue", json=payload)
+
+        create_response = self._request("POST", "/rest/api/3/issue", json=payload)
+        if status and create_response and "id" in create_response and status != "Open":
+            self.transition_ticket(create_response["id"], status)
+
+        return create_response
 
     def update_ticket(
         self,

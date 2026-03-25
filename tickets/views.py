@@ -200,6 +200,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 severity_str = (
                     ticket.get_severity_display() if ticket.severity else None
                 )
+                status_str = ticket.get_status_display() if ticket.status else None
 
                 jira_response = jira_client.create_ticket(
                     project_key=project.key,
@@ -208,6 +209,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                     severity=severity_str,
                     assignee_id=assignee_id,
                     deadline=deadline_str,
+                    status=status_str,
                 )
                 ticket.jira_key = jira_response.get("key")
                 ticket.save(update_fields=["jira_key"])
