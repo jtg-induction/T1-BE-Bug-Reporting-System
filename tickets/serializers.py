@@ -10,9 +10,11 @@ class TicketListSerializer(serializers.ModelSerializer):
     Transforms relational fields into readable formats and dynamically evaluates
     the requesting user's subscription status.
     """
-
-    assignee = serializers.SerializerMethodField()
-    reporter = serializers.EmailField(source="reporter.email", read_only=True)
+    assignee_id = serializers.SerializerMethodField()
+    assignee_email = serializers.SerializerMethodField()
+    assignee_name = serializers.SerializerMethodField()
+    reporter_email = serializers.EmailField(source="reporter.email", read_only=True)
+    reporter_name = serializers.SerializerMethodField()
     project = serializers.CharField(source="project.key", read_only=True)
     project_id = serializers.UUIDField(source="project.id", read_only=True)
     is_subscribed = serializers.SerializerMethodField()
@@ -26,8 +28,11 @@ class TicketListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "title",
-            "assignee",
-            "reporter",
+            "assignee_id",
+            "assignee_name",
+            "assignee_email",
+            "reporter_name",
+            "reporter_email",
             "project",
             "status",
             "severity",
@@ -50,10 +55,22 @@ class TicketListSerializer(serializers.ModelSerializer):
         return TicketSubscriber.objects.filter(
             ticket=obj, user=request.user, status=TicketSubscriber.Status.SUBSCRIBED
         ).exists()
+    
+    def get_assignee_id(self, obj):
+        """Returns the assignee's ID if assignee exists."""
+        return obj.assignee.id if obj.assignee else None
 
-    def get_assignee(self, obj):
+    def get_assignee_email(self, obj):
         """Returns the assignee's email if assignee exists."""
         return obj.assignee.email if obj.assignee else None
+    
+    def get_assignee_name(self, obj):
+        """Returns the assignee's full name if assignee exists."""
+        return f"{obj.assignee.first_name} {obj.assignee.last_name}" if obj.assignee else None
+    
+    def get_reporter_name(self, obj):
+        """Returns the reporter's full name"""
+        return f"{obj.reporter.first_name} {obj.reporter.last_name}"
 
 
 class TicketReadSerializer(TicketListSerializer):

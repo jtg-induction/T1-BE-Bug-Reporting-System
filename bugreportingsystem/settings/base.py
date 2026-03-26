@@ -2,6 +2,7 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -52,6 +53,14 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+raw_headers = os.getenv("CORS_ALLOWED_HEADERS", "")
+
+CUSTOM_HEADERS = [
+    header.strip() for header in raw_headers.split(",") if header.strip()
+]
+CORS_ALLOW_HEADERS = list(default_headers) + CUSTOM_HEADERS
+
 
 raw_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from urllib.parse import urlparse
 
+import pytz
 import requests
 from django.db.models import Count, F, Q
 from django.db.models.functions import TruncDay
@@ -645,14 +646,19 @@ class JiraClient:
 
 
 class ReportGenerator:
-    def __init__(self, start_date=None, end_date=None):
+    def __init__(self, start_date=None, end_date=None, tz_name="UTC"):
+
+        try:
+            self.user_tz = pytz.timezone(tz_name)
+        except pytz.UnknownTimeZoneError:
+            self.user_tz = pytz.UTC
 
         filter_date_format = "%Y-%m-%d"
-        now = timezone.now()
+        self.now_local = timezone.now().astimezone(self.user_tz)
 
         if not start_date and not end_date:
-            self.start_dt = (now - timedelta(days=now.weekday())).date()
-            self.end_dt = (now + timedelta(days=6-now.weekday())).date()
+            self.start_dt = (self.now_local - timedelta(days=self.now_local.weekday())).date()
+            self.end_dt = (self.now_local + timedelta(days=6-self.now_local.weekday())).date()
         else:
             self.start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
@@ -669,7 +675,7 @@ class ReportGenerator:
     def generate_project_report(
         self, project_key, project_id, user_ids_raw=""
     ):
-        now = timezone.now()
+        now = self.now_local
 
         uuid_pattern = (
             r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -861,6 +867,9 @@ class ReportGenerator:
                 f"{t.reporter.first_name} {t.reporter.last_name}",
                 style=styles["Normal"],
             )
+            updated_local = t.updated_at.astimezone(self.user_tz) if t.updated_at else None
+            deadline_local = t.deadline.astimezone(self.user_tz) if t.deadline else None
+            closed_at_local = t.closed_at.astimezone(self.user_tz) if t.closed_at else None
             t_log_data.append(
                 [
                     i,
@@ -868,11 +877,11 @@ class ReportGenerator:
                     key,
                     assignee,
                     reporter,
-                    t.updated_at.strftime("%y-%m-%d") if t.updated_at else "-",
+                    updated_local.strftime("%y-%m-%d") if updated_local else "-",
                     t.get_status_display(),
                     t.get_severity_display(),
-                    t.deadline.strftime("%y-%m-%d") if t.deadline else "-",
-                    t.closed_at.strftime("%y-%m-%d") if t.closed_at else "-",
+                    deadline_local.strftime("%y-%m-%d") if deadline_local else "-",
+                    closed_at_local.strftime("%y-%m-%d") if closed_at_local else "-",
                 ]
             )
 
@@ -904,7 +913,7 @@ class ReportGenerator:
 
     def generate_user_performance_report(self, user):
 
-        now = timezone.now()
+        now = self.now_local
 
         initial_queryset = Ticket.objects.filter(assignee=user)
 
@@ -1061,14 +1070,16 @@ class ReportGenerator:
         log_data = [["SN", "Ticket", "Key", "Status", "Severity", "Deadline"]]
 
         for i, t in enumerate(initial_queryset, 1):
+            title = Paragraph(t.title, style=styles["Normal"]),
+            deadline_local = t.deadline.astimezone(self.user_tz) if t.deadline else None
             log_data.append(
                 [
                     i,
-                    (t.title[:30] + "..") if len(t.title) > 32 else t.title,
+                    title,
                     t.jira_key or "-",
                     t.get_status_display(),
                     t.get_severity_display(),
-                    t.deadline.strftime("%y-%m-%d") if t.deadline else "-",
+                    deadline_local.strftime("%y-%m-%d") if deadline_local else "-",
                 ]
             )
 

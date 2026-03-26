@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, F, Q, Subquery
 from django.db.models.functions import TruncDay
 from django.http import FileResponse
@@ -79,10 +79,25 @@ class ProjectViewSet(
     def get_queryset(self):
         """
         Retrieves projects where the user is an active member.
-        Supports filtering by 'archived' status via query parameters.
         """
+        archive_filter = models.Q(
+            status=Project.Status.ARCHIVED,
+            project_members__role=ProjectMember.Role.ADMIN,
+            project_members__member=self.request.user,
+            project_members__status=ProjectMember.Status.ACTIVE,
+        )
+        active_filter = models.Q(
+            status=Project.Status.ACTIVE,
+            project_members__member=self.request.user,
+            project_members__status=ProjectMember.Status.ACTIVE,
+        )
         projects = Project.objects.distinct()
-        return projects
+        project_status = self.request.GET.get("status", None)
+        if self.action in ["retrieve", "list"]:
+            return projects.filter(archive_filter | active_filter)
+        elif project_status == Project.Status.ARCHIVED.value:
+            return projects.filter(archive_filter)
+        return projects.filter(active_filter)
 
     def get_permissions(self):
         """
@@ -739,10 +754,10 @@ class ProjectViewSet(
         end_date = query.get("end-date") if query and query.get("end-date") else None
         if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-
+        user_tz = request.headers.get('x-timezone')
         project_key = Project.objects.get(id=pk).key
         report_generator = ReportGenerator(
-            start_date=start_date, end_date=end_date
+            start_date=start_date, end_date=end_date, tz_name=user_tz
         )
         buffer = report_generator.generate_project_report(
             user_ids_raw=user_ids,
