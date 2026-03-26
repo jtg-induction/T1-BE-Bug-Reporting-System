@@ -35,7 +35,7 @@ class Project(BaseModel):
     archived_at = models.DateTimeField(null=True, blank=True)
     key = models.CharField(max_length=50, unique=True)
     jira_url = models.URLField()
-    jira_project_id = models.CharField(max_length=50)
+    jira_project_id = models.CharField(max_length=50, unique=True)
 
     def __str__(self):
         """

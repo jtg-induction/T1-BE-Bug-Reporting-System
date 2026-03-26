@@ -61,7 +61,7 @@ class Ticket(BaseModel):
     deadline = models.DateTimeField(null=True, blank=True)
     status_updated_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
-    jira_key = models.CharField(max_length=100, blank=True, db_index=True)
+    jira_key = models.CharField(max_length=100, blank=True, db_index=True, unique=True)
     reminder_task_id = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):

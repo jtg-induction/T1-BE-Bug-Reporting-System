@@ -1,7 +1,13 @@
 import logging
+import re
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
+from django.db.models import Count, F, Q, Subquery
+from django.db.models.functions import TruncDay
+from django.http import FileResponse
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -10,11 +16,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.tasks import send_invitation_email
-from core.utils import JiraClient, JiraClientException
+from core.utils import JiraClient, JiraClientException, ReportGenerator
 from projects.filters import ProjectFilter, ProjectMemberFilter
 from projects.models import Project, ProjectMember
 from projects.permissions import IsAdmin
 from projects.serializers import ProjectMemberSerializer, ProjectSerializer
+from tickets.models import Ticket
 from users.serializers import UserSerializer
 
 logger = logging.getLogger(__name__)
@@ -109,10 +116,8 @@ class ProjectViewSet(
 
     def create(self, request, *args, **kwargs):
         """
-        Creates a local project and syncs it with Jira.
-
-        Uses an atomic transaction to create the Project and ProjectMember records,
-        calls the Jira API to create the remote project, and stores the Jira ID locally.
+        Handles the creation of a new project by creating it in Jira first,
+        and then saving it to the local database.
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -126,16 +131,36 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, request.user.email, access_token)
         except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            jira_response = jira_client.create_project(
+                key=key,
+                name=title,
+                description=description,
+                lead_account_id=request.user.jiraID,
+            )
+            jira_project_id = jira_response.get("id")
+
+        except JiraClientException as e:
+            status_code = (
+                status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+            return Response(
+                {
+                    "error": f"Failed to create project in Jira: {str(e)}",
+                    "jira_details": e.response_data,
+                },
+                status=status_code,
+            )
         try:
             with transaction.atomic():
                 project = serializer.save(
                     jira_url=jira_client.base_url,
                     owner=request.user,
-                    jira_project_id="",
+                    jira_project_id=jira_project_id,
                 )
 
                 ProjectMember.objects.create(
@@ -146,38 +171,18 @@ class ProjectViewSet(
                     status=ProjectMember.Status.ACTIVE,
                 )
 
-                jira_response = jira_client.create_project(
-                    key=key,
-                    name=title,
-                    description=description,
-                    lead_account_id=request.user.jiraID,
-                )
-
-                project.jira_project_id = jira_response.get("id")
-                project.save(update_fields=["jira_project_id"])
-
-                response_serializer = ProjectSerializer(
-                    project, context={"request": request}
-                )
-                return Response(
-                    response_serializer.data, status=status.HTTP_201_CREATED
-                )
-
-        except JiraClientException as e:
-            status_code = (
-                status.HTTP_400_BAD_REQUEST
-                if e.status_code
-                else status.HTTP_503_SERVICE_UNAVAILABLE
+            response_serializer = ProjectSerializer(
+                project, context={"request": request}
             )
-            return Response(
-                {"error": str(e), "jira_details": e.response_data},
-                status=status_code,
-            )
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            logger.exception("Unexpected error during project creation")
+            logger.exception("Unexpected error during local project creation")
             return Response(
-                {"error": "A database error occurred.", "details": str(e)},
+                {
+                    "error": "Project created in Jira, but a local database error occurred.",
+                    "details": str(e),
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -190,6 +195,7 @@ class ProjectViewSet(
             instance, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
+
         key = instance.key
         title = serializer.validated_data.get("title")
         description = serializer.validated_data.get("description")
@@ -199,15 +205,12 @@ class ProjectViewSet(
         try:
             jira_client = JiraClient(raw_url, request.user.email, access_token)
         except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            with transaction.atomic():
-                super().update(request, *args, **kwargs)
+            super().update(request, *args, **kwargs)
 
-                jira_client.update_project(
+            jira_client.update_project(
                     key=key,
                     name=title,
                     description=description,
@@ -215,10 +218,10 @@ class ProjectViewSet(
                     project_id=instance.jira_project_id,
                 )
 
-                response_serializer = ProjectSerializer(
+            response_serializer = ProjectSerializer(
                     instance, context={"request": request}
                 )
-                return Response(
+            return Response(
                     response_serializer.data,
                     status=status.HTTP_200_OK,
                 )
@@ -230,12 +233,15 @@ class ProjectViewSet(
                 else status.HTTP_503_SERVICE_UNAVAILABLE
             )
             return Response(
-                {"error": str(e), "jira_details": e.response_data},
+                {
+                    "error": f"Project updated locally, but Jira sync failed: {str(e)}",
+                    "jira_details": e.response_data,
+                },
                 status=status_code,
             )
 
         except Exception as e:
-            logger.exception("Unexpected error during project updation")
+            logger.exception("Unexpected error during project update")
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -403,9 +409,7 @@ class ProjectViewSet(
                             status=status.HTTP_200_OK,
                         )
                 else:
-                    raise PermissionDenied(
-                        "Admins can be removed by owner only"
-                    )
+                    raise PermissionDenied("Admins can be removed by owner only")
             else:
                 pm_instance = ProjectMember.objects.filter(
                     project__id=pk, member=member
@@ -447,18 +451,17 @@ class ProjectViewSet(
         if not role:
             raise ParseError("Provide a Role for this user")
 
-        pm_admin = ProjectMember.objects.filter(
-            member=admin, project=project
-        ).first()
-        pm_member = ProjectMember.objects.filter(
-            member=member, project=project
-        ).first()
+        pm_admin = ProjectMember.objects.filter(member=admin, project=project).first()
+        pm_member = ProjectMember.objects.filter(member=member, project=project).first()
 
-        if role == ProjectMember.Role.ADMIN.value:
+        if role == 3:
             if project.owner == admin:
                 if pm_member.role != ProjectMember.Role.ADMIN:
                     pm_member.role = ProjectMember.Role.ADMIN
                     pm_member.save()
+                
+                pm_admin.status = ProjectMember.Status.REVOKED
+                pm_admin.save()
 
                 project.owner = member
                 project.save()
@@ -470,10 +473,7 @@ class ProjectViewSet(
                 raise PermissionDenied("You are not the owner of this project")
 
         if pm_admin.role == ProjectMember.Role.ADMIN:
-            if (
-                pm_member.role == ProjectMember.Role.ADMIN
-                and project.owner != admin
-            ):
+            if pm_member.role == ProjectMember.Role.ADMIN and project.owner != admin:
                 raise ParseError("Can't change role of another admin")
 
             else:
@@ -512,14 +512,10 @@ class ProjectViewSet(
         members = self.filter_queryset(members)
         page = self.paginate_queryset(members)
         if page is not None:
-            serializer = self.get_serializer(
-                page, many=True, context={"user": user}
-            )
+            serializer = self.get_serializer(page, many=True, context={"user": user})
             return self.get_paginated_response(serializer.data)
 
-        serializer = self.get_serializer(
-            members, many=True, context={"user": user}
-        )
+        serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="available_members")
@@ -530,17 +526,19 @@ class ProjectViewSet(
         user = request.user
         project = self.get_object()
 
-        if not Project.objects.filter(id=pk).exists():
+        if not project:
             raise NotFound("Project does not exist")
 
-        members = User.objects.exclude(
-            user_projects__project=project,
-            user_projects__status=ProjectMember.Status.ACTIVE,
-        )
+        active_members_subquery = ProjectMember.objects.filter(
+            project=project,
+            status=ProjectMember.Status.ACTIVE
+        ).values('member_id')
 
-        serializer = self.get_serializer(
-            members, many=True, context={"user": user}
-        )
+        members = User.objects.exclude(
+            id__in=Subquery(active_members_subquery)
+        ).exclude(id=request.user.id)
+
+        serializer = self.get_serializer(members, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="archive")
@@ -589,15 +587,13 @@ class ProjectViewSet(
                 raise ParseError("Project already active")
             raise ParseError("Project already archived")
 
-        access_token = user.jira_access_token
-        raw_url = project.jira_url
-
         try:
-            jira_client = JiraClient(raw_url, user.email, access_token)
-        except ValueError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            jira_client = JiraClient(
+                project.jira_url, user.email, user.jira_access_token
             )
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             with transaction.atomic():
                 project.status = new_status
@@ -620,19 +616,163 @@ class ProjectViewSet(
                     )
 
         except JiraClientException as e:
-            status_code = (
-                status.HTTP_400_BAD_REQUEST
-                if e.status_code
-                else status.HTTP_503_SERVICE_UNAVAILABLE
-            )
             return Response(
-                {"error": str(e), "jira_details": e.response_data},
-                status=status_code,
+                {
+                    "error": f"Project unarchived locally, but Jira sync failed: {str(e)}",
+                    "jira_details": e.response_data,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+                if e.status_code
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-
         except Exception as e:
             logger.exception(error_msg)
             return Response(
                 {"error": "A database error occurred.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=True, methods=["get"], url_path="summary")
+    def project_summary(self, request, pk=None):
+        if not ProjectMember.objects.filter(
+            project__id=pk, member=request.user
+        ).exists():
+            raise PermissionDenied("You are not a member of this Project")
+
+        query = request.query_params
+        now = timezone.now()
+        filter_date_format = "%Y-%m-%d"
+
+        base_qs = Ticket.objects.filter(project__id=pk)
+
+        user_ids_raw = query.get("user-ids", "")
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        user_ids = re.findall(uuid_pattern, user_ids_raw.lower())
+        if user_ids:
+            base_qs = base_qs.filter(assignee__id__in=user_ids)
+
+        start_date = query.get("start-date")
+        end_date = query.get("end-date")
+        section = query.get("section")
+
+        if start_date and end_date and start_date > end_date:
+            raise ParseError("Invalid Date Filters")
+
+        if not start_date and not end_date:
+            start_dt = (now - timedelta(days=now.weekday())).date()
+            end_dt = now.date()
+        else:
+            start_dt = (
+                datetime.strptime(start_date, filter_date_format).date()
+                if start_date
+                else None
+            )
+            end_dt = (
+                datetime.strptime(end_date, filter_date_format).date()
+                if end_date
+                else None
+            )
+
+        data = {}
+
+        if not section or section == "deadline":
+            deadline_qs = base_qs.filter(deadline__isnull=False)
+            if start_dt:
+                deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
+            if end_dt:
+                deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
+
+            data["deadline_chart"] = (
+                deadline_qs.annotate(day=TruncDay("deadline"))
+                .values("day")
+                .annotate(
+                    missed=Count(
+                        "id",
+                        filter=Q(closed_at__date__gt=F("deadline__date"))
+                        | Q(closed_at__isnull=True, deadline__lt=now),
+                    ),
+                    completed_on_time=Count(
+                        "id", filter=Q(closed_at__date=F("deadline__date"))
+                    ),
+                    completed_before_time=Count(
+                        "id", filter=Q(closed_at__date__lt=F("deadline__date"))
+                    ),
+                )
+                .order_by("day")
+            )
+
+        if not section or section in ["status", "priority"]:
+            created_qs = base_qs
+            if start_dt:
+                created_qs = created_qs.filter(created_at__date__gte=start_dt)
+            if end_dt:
+                created_qs = created_qs.filter(created_at__date__lte=end_dt)
+
+            if not section:
+                timeline = now - timedelta(seconds=locals().get("history_time", 86400))
+                data["ticket_summary"] = created_qs.aggregate(
+                    completed=Count("id", filter=Q(status=4)),
+                    missed_deadline=Count(
+                        "id", filter=Q(deadline__lt=now) & ~Q(status=4)
+                    ),
+                    total=Count("id"),
+                    near_deadline=Count(
+                        "id",
+                        filter=Q(deadline__gte=now, deadline__lte=timeline),
+                    ),
+                )
+
+            if not section or section == "status":
+                data["ticket_status"] = created_qs.aggregate(
+                    open=Count("id", filter=Q(status=1)),
+                    in_progress=Count("id", filter=Q(status=2)),
+                    resolved=Count("id", filter=Q(status=3)),
+                    closed=Count("id", filter=Q(status=4)),
+                )
+
+            if not section or section == "priority":
+                data["ticket_severity"] = created_qs.aggregate(
+                    lowest=Count("id", filter=Q(severity=1)),
+                    low=Count("id", filter=Q(severity=2)),
+                    medium=Count("id", filter=Q(severity=3)),
+                    high=Count("id", filter=Q(severity=4)),
+                    highest=Count("id", filter=Q(severity=5)),
+                )
+
+        return Response(data)
+
+    @action(detail=True, methods=["get"], url_path="report-generate")
+    def report_generate(self, request, pk=None):
+        user = request.user
+        query = request.query_params
+        if not ProjectMember.objects.filter(
+            project__id=pk,
+            member=user,
+            status=ProjectMember.Status.ACTIVE,
+            role=ProjectMember.Role.ADMIN,
+        ).exists():
+            raise PermissionDenied("You are not an Admin of this Project")
+
+        user_ids = query.get("user-ids") if query and query.get("user-ids") else ""
+        start_date = (
+            query.get("start-date") if query and query.get("start-date") else None
+        )
+        end_date = query.get("end-date") if query and query.get("end-date") else None
+        if start_date and end_date and start_date > end_date:
+            raise ParseError("Invalid Date Filters")
+
+        project_key = Project.objects.filter(id=pk).values_list("key")
+        report_generator = ReportGenerator()
+        buffer = report_generator.generate_project_report(
+            user_ids_raw=user_ids,
+            project_key=project_key,
+            project_id=pk,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename="report.pdf",
+            content_type="application/pdf",
+        )

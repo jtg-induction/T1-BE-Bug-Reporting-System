@@ -102,7 +102,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.list_url = f"/api/projects/{self.project1.id}/tickets/"
         self.detail_url = f"/api/projects/{self.project1.id}/tickets/{self.ticket.id}/"
 
-    @patch("requests.request")
+    @patch("requests.Session.request")
     def test_create_ticket_success_as_admin(self, mock_request):
         """
         Test that an Admin user can successfully create a new ticket
@@ -141,25 +141,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
         response = self.client.post(self.list_url, data)
         self.assertEqual(403, response.status_code)
 
-    @patch("requests.request")
-    def test_create_ticket_jira_rejection(self, mock_request):
-        """
-        Test that ticket creation fails cleanly locally if the Jira API
-        rejects the creation request.
-        """
-        mock_resp = MagicMock()
-        mock_resp.status_code = 400
-        mock_resp.text = "dummy"
-        mock_resp.json.return_value = {"errorMessages": ["Jira Field Required"]}
-        mock_request.return_value = mock_resp
-
-        data = {"title": "Fail Ticket", "description": "Fail description"}
-        response = self.client.post(self.list_url, data)
-
-        self.assertEqual(400, response.status_code)
-        self.assertFalse(Ticket.objects.filter(title="Fail Ticket").exists())
-
-    @patch("requests.request")
+    @patch("requests.Session.request")
     def test_update_ticket_status_success(self, mock_request):
         """
         Test that updating a ticket's status locally successfully finds and
@@ -286,7 +268,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], str(self.project2.id))
 
-    @patch("requests.request")
+    @patch("requests.Session.request")
     def test_jira_import_list_success(self, mock_request):
         """
         Test fetching a clean list of Jira issues available for import.
@@ -323,14 +305,14 @@ class ProjectTicketViewSetTestCase(APITestCase):
         mock_request.return_value = mock_resp
 
         url = f"{self.list_url}jira-import-list/"
-        response = self.client.get(url)
+        response = self.client.post(url)
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["jira_key"], "PROJ1-999")
         self.assertEqual(response.data[0]["description"].strip(), "Plain text desc")
 
-    @patch("requests.request")
+    @patch("requests.Session.request")
     def test_import_ticket_success(self, mock_request):
         """
         Test importing a single Jira issue into the local database,
