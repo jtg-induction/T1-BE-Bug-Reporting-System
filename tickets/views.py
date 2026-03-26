@@ -10,7 +10,6 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -18,7 +17,7 @@ from comments.models import Comment
 from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
-from tickets.filters import TicketFilterMixin
+from tickets.filters import TicketFilter
 from tickets.models import Ticket, TicketSubscriber
 from tickets.permissions import (
     CanUpdateTicketRestrictions,
@@ -42,15 +41,15 @@ from tickets.tasks import (
 User = get_user_model()
 
 
-class UserTicketViewSet(
-    TicketFilterMixin, mixins.ListModelMixin, viewsets.GenericViewSet
-):
+class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     """
     ViewSet for listing tickets associated with the authenticated user.
     """
 
     serializer_class = TicketListSerializer
     permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TicketFilter
 
     def get_queryset(self):
         """
@@ -74,52 +73,16 @@ class UserTicketViewSet(
             .order_by("-created_at")
         )
 
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    ordering_fields = [
-        "id",
-        "title",
-        "reporter__email",
-        "assignee__email",
-        "severity",
-        "status",
-        "deadline",
-        "created_at",
-    ]
 
-    field_maps = {
-        "list": {
-            "reporter": "reporter__email",
-            "assignee": "assignee__email",
-        }
-    }
-
-
-class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
+class ProjectTicketViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing tickets within a specific project context.
     Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .
     """
 
     lookup_url_kwarg = "ticket_id"
-
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    ordering_fields = [
-        "id",
-        "title",
-        "reporter__email",
-        "assignee__email",
-        "severity",
-        "status",
-        "deadline",
-        "created_at",
-    ]
-
-    field_maps = {
-        "list": {
-            "reporter": "reporter__email",
-            "assignee": "assignee__email",
-        }
-    }
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TicketFilter
 
     def get_serializer_class(self):
         """
