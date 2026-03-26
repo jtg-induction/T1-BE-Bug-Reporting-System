@@ -9,7 +9,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -20,6 +20,12 @@ from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
 from tickets.filters import TicketFilterMixin
 from tickets.models import Ticket, TicketSubscriber
+from tickets.permissions import (
+    CanUpdateTicketRestrictions,
+    IsActiveProjectMember,
+    IsProjectActive,
+    IsProjectAdmin,
+)
 from tickets.serializers import (
     TicketListSerializer,
     TicketReadSerializer,
@@ -96,6 +102,25 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
 
     lookup_url_kwarg = "ticket_id"
 
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = [
+        "id",
+        "title",
+        "reporter__email",
+        "assignee__email",
+        "severity",
+        "status",
+        "deadline",
+        "created_at",
+    ]
+
+    field_maps = {
+        "list": {
+            "reporter": "reporter__email",
+            "assignee": "assignee__email",
+        }
+    }
+
     def get_serializer_class(self):
         """
         Determines the appropriate serializer based on the action being performed.
@@ -118,24 +143,31 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             project__project_members__status=ProjectMember.Status.ACTIVE,
         ).select_related("assignee", "reporter", "project")
 
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    ordering_fields = [
-        "id",
-        "title",
-        "reporter__email",
-        "assignee__email",
-        "severity",
-        "status",
-        "deadline",
-        "created_at",
-    ]
+    def get_permissions(self):
+        """
+        Dynamically applies permissions based on the action.
+        """
+        if self.action in ["create", "destroy", "import_ticket", "jira_import_list"]:
+            permission_classes = [IsAuthenticated, IsProjectActive, IsProjectAdmin]
 
-    field_maps = {
-        "list": {
-            "reporter": "reporter__email",
-            "assignee": "assignee__email",
-        }
-    }
+        elif self.action in ["update", "partial_update"]:
+            permission_classes = [
+                IsAuthenticated,
+                IsProjectActive,
+                CanUpdateTicketRestrictions,
+            ]
+
+        elif self.action in ["subscribe", "unsubscribe"]:
+            permission_classes = [
+                IsAuthenticated,
+                IsProjectActive,
+                IsActiveProjectMember,
+            ]
+
+        else:
+            permission_classes = [IsAuthenticated, IsActiveProjectMember]
+
+        return [permission() for permission in permission_classes]
 
     def create(self, request, *args, **kwargs):
         """
@@ -145,23 +177,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         project_id = self.kwargs.get("project_id")
         project = get_object_or_404(Project, id=project_id)
         user = request.user
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot add tickets to an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied(
-                "You do not have permission to create tickets in this project. Admin role required."
-            )
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -536,41 +551,21 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         if "deadline" in data and data["deadline"] == "":
             data["deadline"] = None
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot update tickets in an inactive project."}
-            )
-
-        is_reporter = ticket.reporter == user
-        is_assignee = ticket.assignee == user
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
         new_project_id = data.pop("project_id", None)
         if new_project_id and str(new_project_id) != str(project.id):
+            is_admin = ProjectMember.objects.filter(
+                project=project,
+                member=user,
+                role=ProjectMember.Role.ADMIN,
+                status=ProjectMember.Status.ACTIVE,
+            ).exists()
             return self._handle_project_move(
                 request, ticket, project, new_project_id, user, is_admin
             )
 
-        if not (is_reporter or is_assignee or is_admin):
-            raise PermissionDenied("You do not have permission to edit this ticket.")
-
-        if not is_admin and not is_reporter:
-            for field in data.keys():
-                if field != "status":
-                    raise PermissionDenied(
-                        f"Assignees can only update the status. Cannot edit '{field}'."
-                    )
-
         new_status_val = data.get("status")
         status_changed = False
         if new_status_val is not None and int(new_status_val) != ticket.status:
-            if int(new_status_val) == Ticket.Status.CLOSED and not is_reporter:
-                raise PermissionDenied("Only the reporter can mark a ticket as Closed.")
             status_changed = True
 
         general_data = data.copy()
@@ -670,21 +665,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot delete tickets in an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied("You do not have permission to delete this ticket.")
-
         try:
             jira_url = project.jira_url
             jira_token = user.jira_access_token
@@ -735,6 +715,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             role=ProjectMember.Role.ADMIN,
             status=ProjectMember.Status.ACTIVE,
         ).values_list("project_id", flat=True)
+
         compatible_projects = Project.objects.filter(
             id__in=admin_project_ids, status=2, jira_url=current_project.jira_url
         ).exclude(id=current_project.id)
@@ -754,20 +735,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         project = get_object_or_404(Project, id=project_id)
         user = request.user
         jql = request.data.get("jql", None)
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot import tickets from an inactive project."}
-            )
-
-        is_member = ProjectMember.objects.filter(
-            project=project, member=user, status=ProjectMember.Status.ACTIVE
-        ).exists()
-
-        if not is_member:
-            raise PermissionDenied(
-                "You do not have permission to view tickets for this project."
-            )
 
         try:
             jira_client = JiraClient(
@@ -848,23 +815,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             return Response(
                 {"error": "The 'jira_key' field is required in the payload."},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot import tickets into an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied(
-                "You do not have permission to import tickets. Admin role required."
             )
 
         if Ticket.objects.filter(project=project, jira_key=jira_identifier).exists():
@@ -1001,15 +951,18 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                     c_jira_id = jira_comment.get("id")
                     c_author_dict = jira_comment.get("author", {})
                     c_author_account_id = c_author_dict.get("accountId")
-                    c_author_display_name = c_author_dict.get(
-                        "displayName", "Unknown Jira User"
-                    )
 
                     c_author_user = None
                     if c_author_account_id:
                         c_author_user = User.objects.filter(
                             jiraID=c_author_account_id
                         ).first()
+                    if c_author_user:
+                        c_author_display_name = f"{c_author_user.first_name} {c_author_user.last_name}".strip()
+                    else:
+                        c_author_display_name = c_author_dict.get(
+                            "displayName", "Unknown Jira User"
+                        )
 
                     c_body_raw = jira_comment.get("body")
                     c_body_md = (
