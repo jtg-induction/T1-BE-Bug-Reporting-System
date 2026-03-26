@@ -730,21 +730,54 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         Fetches tickets from Jira for the current project, with an optional custom JQL filter
         sent in the request body.
 
-        Expected payload: {"jql": 'status="In Progress"'} (optional)
+        Expected payload: {"jql": 'status="In Progress"',"nextPageToken":"token"} (optional)
         """
         project = get_object_or_404(Project, id=project_id)
         user = request.user
-        jql = request.data.get("jql", None)
+
+        user_jql = request.data.get("jql", None)
+        next_token = request.data.get("nextPageToken", None)
+
+        existing_jira_keys = list(
+            Ticket.objects.filter(project=project)
+            .exclude(jira_key__isnull=True)
+            .exclude(jira_key="")
+            .values_list("jira_key", flat=True)
+        )
+
+        local_user_account_ids = list(
+            User.objects.exclude(jiraID__isnull=True)
+            .exclude(jiraID="")
+            .values_list("jiraID", flat=True)
+        )
+
+        if not local_user_account_ids:
+            return Response(
+                {"results": [], "nextPageToken": None}, status=status.HTTP_200_OK
+            )
+
+        reporter_list = ",".join([f'"{aid}"' for aid in local_user_account_ids])
+        dynamic_jql = f"reporter in ({reporter_list})"
+
+        if existing_jira_keys:
+            key_list = ",".join([f'"{key}"' for key in existing_jira_keys])
+            dynamic_jql += f" AND issueKey not in ({key_list})"
+
+        if user_jql:
+            dynamic_jql += f" AND ({user_jql})"
 
         try:
             jira_client = JiraClient(
                 project.jira_url, user.email, user.jira_access_token
             )
-
-            response_data = jira_client.get_project_issues(
-                project.key, additional_jql=jql
+            response_data = jira_client.get_project_issues_page(
+                project_key=project.key,
+                additional_jql=dynamic_jql,
+                max_results=15,
+                next_token=next_token,
             )
             jira_issues = response_data.get("issues", [])
+            new_next_token = response_data.get("nextPageToken", None)
 
         except Exception as e:
             return Response(
@@ -752,53 +785,26 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        existing_jira_keys = set(
-            Ticket.objects.filter(project=project)
-            .exclude(jira_key__isnull=True)
-            .exclude(jira_key="")
-            .values_list("jira_key", flat=True)
-        )
-
-        local_user_account_ids = set(
-            User.objects.exclude(jiraID__isnull=True)
-            .exclude(jiraID="")
-            .values_list("jiraID", flat=True)
-        )
-
         importable_tickets = []
-
         for issue in jira_issues:
-            jira_key = issue.get("key")
-            jira_id = issue.get("id")
             fields = issue.get("fields", {})
-
-            if jira_key in existing_jira_keys:
-                continue
-
-            reporter_account_id = fields.get("reporter", {}).get("accountId")
-
-            if (
-                not reporter_account_id
-                or reporter_account_id not in local_user_account_ids
-            ):
-                continue
-
             raw_description = fields.get("description")
-            text_description = (
-                JiraClient.extract_text_from_adf(raw_description)
-                if raw_description
-                else ""
-            )
+
             importable_tickets.append(
                 {
-                    "jira_id": jira_id,
-                    "jira_key": jira_key,
+                    "jira_id": issue.get("id"),
+                    "jira_key": issue.get("key"),
                     "title": fields.get("summary", ""),
-                    "description": text_description,
+                    "description": JiraClient.extract_text_from_adf(raw_description)
+                    if raw_description
+                    else "",
                 }
             )
 
-        return Response(importable_tickets, status=status.HTTP_200_OK)
+        return Response(
+            {"results": importable_tickets, "nextPageToken": new_next_token},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["post"], url_path="import-ticket")
     def import_ticket(self, request, project_id=None):

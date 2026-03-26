@@ -582,18 +582,26 @@ class JiraClient:
         """
         return self._request("DELETE", f"/rest/api/3/issue/{jira_id}")
 
-    def get_project_issues(self, project_key, additional_jql=None):
+    def get_project_issues_page(
+        self, project_key, additional_jql=None, max_results=15, next_token=None
+    ):
         """
         Fetches a list of issues for a specific Jira project.
         Allows an optional custom JQL string to further filter the results.
         """
         jql = f'project="{project_key}"'
-        if additional_jql:
-            jql += f" AND ({additional_jql})"
 
         endpoint = "/rest/api/3/search/jql"
-        params = {"jql": jql, "fields": "summary,description,reporter,assignee"}
-        return self._request("GET", endpoint, params=params)
+        payload = {
+            "jql": jql,
+            "fields": ["summary", "description", "reporter", "assignee"],
+            "maxResults": max_results,
+        }
+
+        if next_token:
+            payload["nextPageToken"] = next_token
+
+        return self._request("POST", endpoint, json=payload)
 
     def get_ticket(self, jira_id_or_key):
         """
@@ -657,8 +665,12 @@ class ReportGenerator:
         self.now_local = timezone.now().astimezone(self.user_tz)
 
         if not start_date and not end_date:
-            self.start_dt = (self.now_local - timedelta(days=self.now_local.weekday())).date()
-            self.end_dt = (self.now_local + timedelta(days=6-self.now_local.weekday())).date()
+            self.start_dt = (
+                self.now_local - timedelta(days=self.now_local.weekday())
+            ).date()
+            self.end_dt = (
+                self.now_local + timedelta(days=6 - self.now_local.weekday())
+            ).date()
         else:
             self.start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
@@ -672,14 +684,10 @@ class ReportGenerator:
             )
         pass
 
-    def generate_project_report(
-        self, project_key, project_id, user_ids_raw=""
-    ):
+    def generate_project_report(self, project_key, project_id, user_ids_raw=""):
         now = self.now_local
 
-        uuid_pattern = (
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        )
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
         self.user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
 
         base_qs = Ticket.objects.filter(project_id=project_id)
@@ -714,9 +722,7 @@ class ReportGenerator:
                     filter=Q(closed_at__date__gt=F("deadline__date"))
                     | Q(closed_at__isnull=True, deadline__lt=now),
                 ),
-                on_time=Count(
-                    "id", filter=Q(closed_at__date=F("deadline__date"))
-                ),
+                on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
                 before_time=Count(
                     "id", filter=Q(closed_at__date__lt=F("deadline__date"))
                 ),
@@ -854,9 +860,7 @@ class ReportGenerator:
         ]
         for i, t in enumerate(base_qs, 1):
             title = Paragraph(t.title, style=styles["Normal"])
-            key = Paragraph(
-                t.jira_key if t.jira_key else "-", style=styles["Normal"]
-            )
+            key = Paragraph(t.jira_key if t.jira_key else "-", style=styles["Normal"])
             assignee = Paragraph(
                 f"{t.assignee.first_name} {t.assignee.last_name}"
                 if t.assignee
@@ -867,9 +871,13 @@ class ReportGenerator:
                 f"{t.reporter.first_name} {t.reporter.last_name}",
                 style=styles["Normal"],
             )
-            updated_local = t.updated_at.astimezone(self.user_tz) if t.updated_at else None
+            updated_local = (
+                t.updated_at.astimezone(self.user_tz) if t.updated_at else None
+            )
             deadline_local = t.deadline.astimezone(self.user_tz) if t.deadline else None
-            closed_at_local = t.closed_at.astimezone(self.user_tz) if t.closed_at else None
+            closed_at_local = (
+                t.closed_at.astimezone(self.user_tz) if t.closed_at else None
+            )
             t_log_data.append(
                 [
                     i,
@@ -922,9 +930,7 @@ class ReportGenerator:
                 deadline__date__gte=self.start_dt
             )
         if self.end_dt:
-            initial_queryset = initial_queryset.filter(
-                deadline__date__lte=self.end_dt
-            )
+            initial_queryset = initial_queryset.filter(deadline__date__lte=self.end_dt)
 
         deadline_qs = initial_queryset.filter(deadline__isnull=False)
 
@@ -950,9 +956,7 @@ class ReportGenerator:
                     filter=Q(closed_at__date__gt=F("deadline__date"))
                     | Q(closed_at__isnull=True, deadline__lt=now),
                 ),
-                on_time=Count(
-                    "id", filter=Q(closed_at__date=F("deadline__date"))
-                ),
+                on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
                 before_time=Count(
                     "id", filter=Q(closed_at__date__lt=F("deadline__date"))
                 ),
@@ -1070,7 +1074,7 @@ class ReportGenerator:
         log_data = [["SN", "Ticket", "Key", "Status", "Severity", "Deadline"]]
 
         for i, t in enumerate(initial_queryset, 1):
-            title = Paragraph(t.title, style=styles["Normal"]),
+            title = (Paragraph(t.title, style=styles["Normal"]),)
             deadline_local = t.deadline.astimezone(self.user_tz) if t.deadline else None
             log_data.append(
                 [
