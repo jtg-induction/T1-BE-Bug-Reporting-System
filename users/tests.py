@@ -1,4 +1,5 @@
 import pytest
+from ddf import G
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
@@ -20,30 +21,17 @@ class UserProfileAPIViewTestCase(APITestCase):
         Initializes test users, sets up URLs, logs in the primary user,
         and configures the test client with JWT credentials.
         """
-        self.user = User.objects.create_user(
-            first_name="test",
-            last_name="user",
-            email="test@testuser.com",
-            password="tester",
-            designation="M",
-            jiraID="abcd",
-            phone="1234567890",
-            jira_access_token="test_access_token",
-        )
-        self.user2 = User.objects.create_user(
-            first_name="test2",
-            last_name="user2",
-            email="test2@testuser.com",
-            password="tester2",
-            designation="M",
-            jiraID="abcde",
-            phone="1234567891",
-            jira_access_token="test_access_token2",
-        )
+        self.user = G(User)
+        self.user.set_password("tester")
+        self.user.save()
+
+        self.user2 = G(User)
+        self.user2.set_password("tester2")
+        self.user2.save()
 
         self.url = reverse("users:user-detail", kwargs={"pk": self.user.pk})
         response = self.client.post(
-            self.login, {"email": "test@testuser.com", "password": "tester"}
+            self.login, {"email": self.user.email, "password": "tester"}
         )
         self.access = response.data["access"]
         self.refresh = response.cookies["refresh"]
@@ -93,7 +81,7 @@ class UserProfileAPIViewTestCase(APITestCase):
         Verifies that a user can view another user's profile but does not receive edit permissions.
         """
         response = self.client.post(
-            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+            self.login, {"email": self.user2.email, "password": "tester2"}
         )
         access = response.data["access"]
         refresh = response.cookies["refresh"]
@@ -117,7 +105,7 @@ class UserProfileAPIViewTestCase(APITestCase):
         and that no changes are actually made to the target profile.
         """
         response = self.client.post(
-            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+            self.login, {"email": self.user2.email, "password": "tester2"}
         )
         access = response.data["access"]
         refresh = response.cookies["refresh"]

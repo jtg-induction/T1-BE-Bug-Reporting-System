@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from ddf import G
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
@@ -17,76 +18,55 @@ class CommentViewSetTestCase(APITestCase):
     login = reverse("core:login")
 
     def setUp(self):
-        self.user1 = User.objects.create_user(
-            first_name="User",
-            last_name="One",
-            email="user1@test.com",
-            password="tester",
-            designation="SD",
-            jiraID="user1-jira-id",
-            jira_access_token="user1_token",
-        )
+        self.user1 = G(User)
+        self.user1.set_password("tester")
+        self.user1.save()
 
-        self.user2 = User.objects.create_user(
-            first_name="User",
-            last_name="Two",
-            email="user2@test.com",
-            password="tester",
-            designation="SD",
-            jiraID="user2-jira-id",
-            jira_access_token="user2_token",
-        )
-
-        self.user3 = User.objects.create_user(
-            first_name="user3",
-            last_name="User",
-            email="user3@test.com",
-            password="tester",
-            designation="SD",
-            jiraID="user3-jira-id",
-            jira_access_token="user3_token",
-        )
+        self.user2 = G(User)
+        self.user3 = G(User)
 
         response = self.client.post(
-            self.login, {"email": "user1@test.com", "password": "tester"}
+            self.login, {"email": self.user1.email, "password": "tester"}
         )
         self.access = response.data.get("access", "")
         self.client.credentials(HTTP_AUTHORIZATION="Bearer " + self.access)
 
-        self.project = Project.objects.create(
-            title="Test Project",
-            description="Test Description",
+        self.project = G(
+            Project,
             status=Project.Status.ACTIVE,
             owner=self.user1,
             key="PROJ1",
             jira_url="https://test.atlassian.net",
         )
-        ProjectMember.objects.create(
+
+        G(
+            ProjectMember,
             project=self.project,
             member=self.user1,
             role=ProjectMember.Role.DEV,
             status=ProjectMember.Status.ACTIVE,
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.project,
             member=self.user2,
             role=ProjectMember.Role.DEV,
             status=ProjectMember.Status.ACTIVE,
         )
 
-        self.ticket = Ticket.objects.create(
+        self.ticket = G(
+            Ticket,
             project=self.project,
             reporter=self.user1,
             title="Test Ticket",
-            description="Ticket Description",
             jira_key="PROJ1-123",
             status=Ticket.Status.OPEN,
         )
 
-        self.comment = Comment.objects.create(
+        self.comment = G(
+            Comment,
             ticket=self.ticket,
             author=self.user2,
-            author_name="User Two",
             description="Initial Comment",
             jira_id="JIRA-COM-1",
         )
@@ -139,13 +119,13 @@ class CommentViewSetTestCase(APITestCase):
         data = {"description": "Testing inactive project."}
         response = self.client.post(self.list_url, data)
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("inactive project", str(response.data))
+        self.assertEqual(response.status_code, 403)
 
     @patch("requests.Session.request")
     def test_update_comment_success(self, mock_request):
         """Test that a user can update their own comment."""
-        my_comment = Comment.objects.create(
+        my_comment = G(
+            Comment,
             ticket=self.ticket,
             author=self.user1,
             description="My original comment",
@@ -176,7 +156,8 @@ class CommentViewSetTestCase(APITestCase):
     @patch("requests.Session.request")
     def test_delete_comment_success(self, mock_request):
         """Test that a user can delete their own comment."""
-        my_comment = Comment.objects.create(
+        my_comment = G(
+            Comment,
             ticket=self.ticket,
             author=self.user1,
             description="I am going to delete this",

@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from ddf import G
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
@@ -25,76 +26,72 @@ class ProjectTicketViewSetTestCase(APITestCase):
         Set up the testing environment.
         Initializes an Admin user, a Developer user, active projects, roles, and a base ticket.
         """
-        self.admin_user = User.objects.create_user(
-            first_name="Admin",
-            last_name="User",
-            email="admin@test.com",
-            password="tester",
+        self.admin_user = G(
+            User,
             designation="M",
             jiraID="admin-jira-id",
-            jira_access_token="admin_token",
         )
+        self.admin_user.set_password("tester")
+        self.admin_user.save()
 
-        self.dev_user = User.objects.create_user(
-            first_name="Dev",
-            last_name="User",
-            email="dev@test.com",
-            password="tester",
+        self.dev_user = G(
+            User,
             designation="SD",
             jiraID="dev-jira-id",
-            jira_access_token="dev_token",
         )
+        self.dev_user.set_password("tester")
+        self.dev_user.save()
 
         response = self.client.post(
-            self.login, {"email": "admin@test.com", "password": "tester"}
+            self.login, {"email": self.admin_user.email, "password": "tester"}
         )
         self.access = response.data.get("access", "")
         self.client.credentials(HTTP_AUTHORIZATION="Bearer " + self.access)
 
-        self.project1 = Project.objects.create(
-            title="Project 1",
-            description="First project",
+        self.project1 = G(
+            Project,
             status=Project.Status.ACTIVE,
             owner=self.admin_user,
             key="PROJ1",
             jira_url="https://test.atlassian.net",
             jira_project_id="10001",
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.project1,
             member=self.admin_user,
             role=ProjectMember.Role.ADMIN,
             status=ProjectMember.Status.ACTIVE,
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.project1,
             member=self.dev_user,
             role=ProjectMember.Role.DEV,
             status=ProjectMember.Status.ACTIVE,
         )
 
-        self.project2 = Project.objects.create(
-            title="Project 2",
-            description="Second project",
+        self.project2 = G(
+            Project,
             status=Project.Status.ACTIVE,
             owner=self.admin_user,
             key="PROJ2",
             jira_url="https://test.atlassian.net",
             jira_project_id="10002",
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.project2,
             member=self.admin_user,
             role=ProjectMember.Role.ADMIN,
             status=ProjectMember.Status.ACTIVE,
         )
 
-        self.ticket = Ticket.objects.create(
+        self.ticket = G(
+            Ticket,
             project=self.project1,
             reporter=self.admin_user,
             assignee=self.dev_user,
-            title="Test Ticket",
-            description="Test Description",
             jira_key="PROJ1-123",
             status=Ticket.Status.OPEN,
         )
@@ -181,7 +178,8 @@ class ProjectTicketViewSetTestCase(APITestCase):
         Ensures the ticket unassigns if the assignee isn't in the new project
         and cleans up stale subscriber records.
         """
-        TicketSubscriber.objects.create(
+        G(
+            TicketSubscriber,
             user=self.dev_user,
             ticket=self.ticket,
             status=TicketSubscriber.Status.SUBSCRIBED,
@@ -244,7 +242,8 @@ class ProjectTicketViewSetTestCase(APITestCase):
         Test that a user can successfully change their subscription status
         to UNSUBSCRIBED.
         """
-        TicketSubscriber.objects.create(
+        G(
+            TicketSubscriber,
             user=self.admin_user,
             ticket=self.ticket,
             status=TicketSubscriber.Status.SUBSCRIBED,
@@ -308,9 +307,10 @@ class ProjectTicketViewSetTestCase(APITestCase):
         response = self.client.post(url)
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["jira_key"], "PROJ1-999")
-        self.assertEqual(response.data[0]["description"].strip(), "Plain text desc")
+        data = response.data.get("results")
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["jira_key"], "PROJ1-999")
+        self.assertEqual(data[0]["description"].strip(), "Plain text desc")
 
     @patch("requests.Session.request")
     def test_import_ticket_success(self, mock_request):
