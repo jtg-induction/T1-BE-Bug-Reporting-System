@@ -1,3 +1,4 @@
+import pytz
 from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
@@ -82,6 +83,12 @@ class UserAPIViewSet(
         query = request.query_params
         now = timezone.now()
         filter_date_format = "%Y-%m-%d"
+        tz_name = self.request.headers.get("x-timezone")
+
+        try:
+            user_tz = pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            user_tz = timezone.get_default_timezone()
 
         initial_queryset = Ticket.objects.filter(assignee_id=pk)
 
@@ -119,7 +126,7 @@ class UserAPIViewSet(
             deadline_qs = initial_queryset
 
             data["deadline_chart"] = (
-                deadline_qs.annotate(day=TruncDay("deadline"))
+                deadline_qs.annotate(day=TruncDay("deadline", tzinfo=user_tz))
                 .values("day")
                 .annotate(
                     missed=Count(

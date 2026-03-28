@@ -1,4 +1,5 @@
 import logging
+import pytz
 import re
 from datetime import datetime, timedelta
 
@@ -109,8 +110,9 @@ class ProjectViewSet(
             "get_available_members",
             "archive_project",
             "unarchive_project",
+            "report_generate",
         ]:
-            return [IsAdmin(), IsAuthenticated()]
+            return [IsAuthenticated(), IsAdmin()]
         return super().get_permissions()
 
     def create(self, request, *args, **kwargs):
@@ -634,6 +636,12 @@ class ProjectViewSet(
         query = request.query_params
         now = timezone.now()
         filter_date_format = "%Y-%m-%d"
+        tz_name = self.request.headers.get("x-timezone")
+
+        try:
+            user_tz = pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            user_tz = timezone.get_default_timezone()
 
         base_qs = Ticket.objects.filter(project__id=pk)
 
@@ -688,7 +696,7 @@ class ProjectViewSet(
         if not section or section in ["deadline"]:
             deadline_qs = base_qs
             data["deadline_chart"] = (
-                deadline_qs.annotate(day=TruncDay("deadline"))
+                deadline_qs.annotate(day=TruncDay("deadline", tzinfo=user_tz))
                 .values("day")
                 .annotate(
                     missed=Count(
@@ -730,33 +738,31 @@ class ProjectViewSet(
 
     @action(detail=True, methods=["get"], url_path="report-generate")
     def report_generate(self, request, pk=None):
-        user = request.user
         query = request.query_params
-        if not ProjectMember.objects.filter(
-            project__id=pk,
-            member=user,
-            status=ProjectMember.Status.ACTIVE,
-            role=ProjectMember.Role.ADMIN,
-        ).exists():
-            raise PermissionDenied("You are not an Admin of this Project")
 
         user_ids = query.get("user-ids") if query and query.get("user-ids") else ""
+
         start_date = (
             query.get("start-date") if query and query.get("start-date") else None
         )
         end_date = query.get("end-date") if query and query.get("end-date") else None
+
         if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-        user_tz = request.headers.get("x-timezone")
+        
+        user_tz = request.headers.get('x-timezone')
         project_key = Project.objects.get(id=pk).key
+
         report_generator = ReportGenerator(
             start_date=start_date, end_date=end_date, tz_name=user_tz
         )
+
         buffer = report_generator.generate_project_report(
             user_ids_raw=user_ids,
             project_key=project_key,
             project_id=pk,
         )
+
         return FileResponse(
             buffer,
             as_attachment=True,

@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import pytz
 import requests
+from django.db import models
 from django.db.models import Count, F, Q
 from django.db.models.functions import TruncDay
 from django.utils import timezone
@@ -660,24 +661,25 @@ class JiraClient:
             "DELETE", f"/rest/api/3/issue/{jira_issue_key}/comment/{jira_comment_id}"
         )
 
-
 class ReportGenerator:
-    def __init__(self, start_date=None, end_date=None, tz_name="UTC"):
+    def __init__(self, start_date=None, end_date=None, tz_name="UTC", include_null=False):
 
         try:
-            self.user_tz = pytz.timezone(tz_name)
+            self.user_tz = pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
         except pytz.UnknownTimeZoneError:
-            self.user_tz = pytz.UTC
+            self.user_tz = timezone.get_default_timezone()
 
         filter_date_format = "%Y-%m-%d"
-        self.now_local = timezone.now().astimezone(self.user_tz)
+        self.output_date_format = "%d-%m-%Y"
+        self.now = timezone.now()
+        self.now_local = self.now.astimezone(self.user_tz)
 
         if not start_date and not end_date:
             self.start_dt = (
-                self.now_local - timedelta(days=self.now_local.weekday())
+                self.now - timedelta(days=self.now.weekday())
             ).date()
             self.end_dt = (
-                self.now_local + timedelta(days=6 - self.now_local.weekday())
+                self.now + timedelta(days=6 - self.now.weekday())
             ).date()
         else:
             self.start_dt = (
@@ -690,27 +692,39 @@ class ReportGenerator:
                 if end_date
                 else None
             )
-        pass
 
-    def generate_project_report(self, project_key, project_id, user_ids_raw=""):
-        now = self.now_local
+        date_range_filter = models.Q(deadline__date__range=(self.start_dt, self.end_dt))
+        with_null_filter = models.Q(deadline__isnull=True)
 
-        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        self.user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
+        if include_null:
+            self.base_filter = models.Q(date_range_filter | with_null_filter)
+        else:
+            self.base_filter = models.Q(date_range_filter)
 
-        base_qs = Ticket.objects.filter(project_id=project_id)
-        if self.user_ids:
-            base_qs = base_qs.filter(assignee__id__in=self.user_ids)
-
-        if self.start_dt:
-            base_qs = base_qs.filter(deadline__date__gte=self.start_dt)
-        if self.end_dt:
-            base_qs = base_qs.filter(deadline__date__lte=self.end_dt)
+    def _get_styled_table(self, data, col_widths, color="#2C3E50"):
+            if len(data) <= 1:
+                return Paragraph("<i>No tickets with deadlines.</i>", getSampleStyleSheet()["Italic"])
+            t = Table(data, colWidths=col_widths)
+            t.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(color)),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ]
+                )
+            )
+            return t
+    
+    def _get_metrics_and_trends(self, base_qs):
 
         summary_metrics = base_qs.aggregate(
             completed=Count("id", filter=Q(status=4)),
             total=Count("id"),
-            missed_deadline=Count("id", filter=Q(deadline__lt=now) & ~Q(status=4)),
+            missed_deadline=Count("id", filter=Q(deadline__lt=self.now) & ~Q(status=4)),
             open=Count("id", filter=Q(status=1)),
             in_progress=Count("id", filter=Q(status=2)),
             resolved=Count("id", filter=Q(status=3)),
@@ -722,13 +736,13 @@ class ReportGenerator:
         )
 
         deadline_trend = (
-            base_qs.annotate(day=TruncDay("deadline"))
+            base_qs.filter(deadline__isnull=False).annotate(day=TruncDay("deadline", tzinfo=self.user_tz))
             .values("day")
             .annotate(
                 missed=Count(
                     "id",
                     filter=Q(closed_at__date__gt=F("deadline__date"))
-                    | Q(closed_at__isnull=True, deadline__lt=now),
+                    | Q(closed_at__isnull=True, deadline__lt=self.now),
                 ),
                 on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
                 before_time=Count(
@@ -737,6 +751,64 @@ class ReportGenerator:
             )
             .order_by("day")
         )
+
+        overview = [["Total Tickets", "Completed", "Missed Deadline", "Completion %"]]
+        status_distribution = [["Open", "In Progress", "Resolved", "Closed"]]
+        severity_distribution = [["Lowest", "Low", "Medium", "High", "Highest"]]
+        trends = [["Date", "Missed", "On Time", "Before Time"]]
+
+        if summary_metrics["total"] > 0:
+            overview.append([
+                summary_metrics["total"],
+                summary_metrics["completed"],
+                summary_metrics["missed_deadline"],
+                f"{(summary_metrics['completed'] / summary_metrics['total'] * 100):.1f}%",
+            ])
+
+            status_distribution.append([
+                summary_metrics["open"],
+                summary_metrics["in_progress"],
+                summary_metrics["resolved"],
+                summary_metrics["completed"],
+            ])
+
+            severity_distribution.append([
+                summary_metrics["lowest"],
+                summary_metrics["low"],
+                summary_metrics["medium"],
+                summary_metrics["high"],
+                summary_metrics["highest"],
+            ])
+
+            for deadline_data in deadline_trend:
+                trends.append([
+                    deadline_data["day"].astimezone(self.user_tz).strftime(self.output_date_format),
+                    deadline_data["missed"],
+                    deadline_data["on_time"],
+                    deadline_data["before_time"],
+                ])
+
+        data = {
+            "overview": overview,
+            "status_distribution": status_distribution,
+            "severity_distribution": severity_distribution,
+            "trends": trends,
+        }
+
+        return data
+
+
+    def generate_project_report(self, project_key, project_id, user_ids_raw=""):
+
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        self.user_ids = re.findall(uuid_pattern, str(user_ids_raw).lower())
+
+        base_qs = Ticket.objects.filter(project_id=project_id).select_related("assignee", "reporter").filter(self.base_filter)
+        
+        if self.user_ids:
+            base_qs = base_qs.filter(assignee__id__in=self.user_ids)
+
+        metrics_and_trends = self._get_metrics_and_trends(base_qs)
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(
@@ -765,92 +837,38 @@ class ReportGenerator:
         )
 
         story = []
+
         story.append(Paragraph("Project Comprehensive Report", title_style))
         story.append(
-            Paragraph(f"Generated: {now.strftime('%Y-%m-%d %H:%M')}", styles["Normal"])
+            Paragraph(f"Generated: {self.now_local.strftime(f"{self.output_date_format} %H:%M")}", styles["Normal"])
         )
         story.append(
             Paragraph(
-                f"Filter Period: {self.start_dt or 'All'} to {self.end_dt or 'Now'}",
+                f"Filter Period: {self.start_dt.strftime(self.output_date_format) or 'All'} to {self.end_dt.strftime(self.output_date_format) or 'Now'}",
                 styles["Normal"],
             )
         )
+
         story.append(Spacer(1, 0.2 * inch))
 
-        def get_table_or_nodata(data_list, col_widths, bg_color="#2C3E50"):
-            if len(data_list) <= 1:
-                return Paragraph("<i>No tickets with deadlines.</i>", styles["Italic"])
-            t = Table(data_list, colWidths=col_widths)
-            t.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(bg_color)),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE", (0, 0), (-1, 0), 8),
-                    ]
-                )
-            )
-            return t
-
-        story.append(Paragraph("1. Global Ticket Overview", sub_style))
-        t_global_data = [
-            ["Total Tickets", "Completed", "Missed Deadline", "Completion %"]
-        ]
-        if summary_metrics["total"] > 0:
-            t_global_data.append(
-                [
-                    summary_metrics["total"],
-                    summary_metrics["completed"],
-                    summary_metrics["missed_deadline"],
-                    f"{(summary_metrics['completed'] / summary_metrics['total'] * 100):.1f}%",
-                ]
-            )
-        story.append(get_table_or_nodata(t_global_data, [1.8 * inch] * 4))
+        story.append(Paragraph("1. Ticket Overview", sub_style))
+        t_global_data = metrics_and_trends["overview"]
+        story.append(self._get_styled_table(t_global_data, [1.8 * inch] * 4))
 
         story.append(Paragraph("2. Ticket Status Distribution", sub_style))
-        t_status_data = [["Open", "In Progress", "Resolved", "Closed"]]
-        if summary_metrics["total"] > 0:
-            t_status_data.append(
-                [
-                    summary_metrics["open"],
-                    summary_metrics["in_progress"],
-                    summary_metrics["resolved"],
-                    summary_metrics["completed"],
-                ]
-            )
-        story.append(get_table_or_nodata(t_status_data, [1.8 * inch] * 4, "#2980B9"))
+        t_status_data = metrics_and_trends["status_distribution"]
+        story.append(self._get_styled_table(t_status_data, [1.8 * inch] * 4, "#2980B9"))
 
-        story.append(Paragraph("3. Severity Breakdown", sub_style))
-        t_sev_data = [["Lowest", "Low", "Medium", "High", "Highest"]]
-        if summary_metrics["total"] > 0:
-            t_sev_data.append(
-                [
-                    summary_metrics["lowest"],
-                    summary_metrics["low"],
-                    summary_metrics["medium"],
-                    summary_metrics["high"],
-                    summary_metrics["highest"],
-                ]
-            )
-        story.append(get_table_or_nodata(t_sev_data, [1.44 * inch] * 5, "#7F8C8D"))
+        story.append(Paragraph("3. Ticket Severity Distribution", sub_style))
+        t_sev_data = metrics_and_trends["severity_distribution"]
+        story.append(self._get_styled_table(t_sev_data, [1.44 * inch] * 5, "#7F8C8D"))
 
-        story.append(Paragraph("4. Daily Deadline Performance", sub_style))
-        t_dead_data = [["Date", "Missed", "On Time", "Before Time"]]
-        for d in deadline_trend[:8]:
-            t_dead_data.append(
-                [
-                    d["day"].strftime("%Y-%m-%d"),
-                    d["missed"],
-                    d["on_time"],
-                    d["before_time"],
-                ]
-            )
-        story.append(get_table_or_nodata(t_dead_data, [1.8 * inch] * 4, "#E67E22"))
+        story.append(Paragraph("4. Deadline Performance", sub_style))
+        t_dead_data = metrics_and_trends["trends"]
+        story.append(self._get_styled_table(t_dead_data, [1.8 * inch] * 4, "#E67E22"))
 
         story.append(PageBreak())
+
         story.append(Paragraph("5. Detailed Ticket Log", sub_style))
         t_log_data = [
             [
@@ -913,7 +931,7 @@ class ReportGenerator:
             0.7 * inch,
             0.7 * inch,
         ]
-        story.append(get_table_or_nodata(t_log_data, log_widths, "#34495E"))
+        story.append(self._get_styled_table(t_log_data, log_widths, "#34495E"))
 
         def footer(canvas, doc):
             canvas.saveState()
@@ -929,48 +947,9 @@ class ReportGenerator:
 
     def generate_user_performance_report(self, user):
 
-        now = self.now_local
+        initial_queryset = Ticket.objects.filter(assignee=user).filter(self.base_filter)
 
-        initial_queryset = Ticket.objects.filter(assignee=user)
-
-        if self.start_dt:
-            initial_queryset = initial_queryset.filter(
-                deadline__date__gte=self.start_dt
-            )
-        if self.end_dt:
-            initial_queryset = initial_queryset.filter(deadline__date__lte=self.end_dt)
-
-        deadline_qs = initial_queryset.filter(deadline__isnull=False)
-
-        metrics = initial_queryset.aggregate(
-            open=Count("id", filter=Q(status=1)),
-            in_progress=Count("id", filter=Q(status=2)),
-            resolved=Count("id", filter=Q(status=3)),
-            closed=Count("id", filter=Q(status=4)),
-            total=Count("id"),
-            lowest=Count("id", filter=Q(severity=1)),
-            low=Count("id", filter=Q(severity=2)),
-            medium=Count("id", filter=Q(severity=3)),
-            high=Count("id", filter=Q(severity=4)),
-            highest=Count("id", filter=Q(severity=5)),
-        )
-
-        deadline_trend = (
-            deadline_qs.annotate(day=TruncDay("deadline"))
-            .values("day")
-            .annotate(
-                missed=Count(
-                    "id",
-                    filter=Q(closed_at__date__gt=F("deadline__date"))
-                    | Q(closed_at__isnull=True, deadline__lt=now),
-                ),
-                on_time=Count("id", filter=Q(closed_at__date=F("deadline__date"))),
-                before_time=Count(
-                    "id", filter=Q(closed_at__date__lt=F("deadline__date"))
-                ),
-            )
-            .order_by("day")
-        )
+        metrics_and_trends = self._get_metrics_and_trends(initial_queryset)
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(
@@ -1004,81 +983,36 @@ class ReportGenerator:
 
         story.append(Paragraph(f"User Performance Report: {user_name}", title_style))
         story.append(
-            Paragraph(f"Generated: {now.strftime('%Y-%m-%d %H:%M')}", styles["Normal"])
+            Paragraph(f"Generated: {self.now_local.strftime(f'{self.output_date_format} %H:%M')}", styles["Normal"])
         )
         story.append(
             Paragraph(
-                f"Reporting Period: {self.start_dt or 'All'} to {self.end_dt or 'Now'}",
+                f"Reporting Period: {self.start_dt.strftime(self.output_date_format) or 'All'} to {self.end_dt.strftime(self.output_date_format) or 'Now'}",
                 styles["Normal"],
             )
         )
+
         story.append(Spacer(1, 0.2 * inch))
 
-        def get_styled_table(data, col_widths, color="#2C3E50"):
-            t = Table(data, colWidths=col_widths)
-            t.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(color)),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 9),
-                    ]
-                )
-            )
-            return t
+        story.append(Paragraph("1. Ticket Overview", sub_style))
+        t_global_data = metrics_and_trends["overview"]
+        story.append(self._get_styled_table(t_global_data, [1.8 * inch] * 4))
 
-        story.append(Paragraph("1. Workload Summary", sub_style))
-        status_data = [["Total Tickets", "Open", "In Progress", "Resolved", "Closed"]]
-        status_data.append(
-            [
-                metrics["total"],
-                metrics["open"],
-                metrics["in_progress"],
-                metrics["resolved"],
-                metrics["closed"],
-            ]
-        )
-        story.append(get_styled_table(status_data, [1.5 * inch] * 5, "#2C3E50"))
+        story.append(Paragraph("2. Ticket Status Distribution", sub_style))
+        t_status_data = metrics_and_trends["status_distribution"]
+        story.append(self._get_styled_table(t_status_data, [1.8 * inch] * 4, "#2980B9"))
 
-        story.append(Paragraph("2. Assigned Severity Breakdown", sub_style))
-        sev_data = [["Lowest", "Low", "Medium", "High", "Highest"]]
-        sev_data.append(
-            [
-                metrics["lowest"],
-                metrics["low"],
-                metrics["medium"],
-                metrics["high"],
-                metrics["highest"],
-            ]
-        )
-        story.append(get_styled_table(sev_data, [1.5 * inch] * 5, "#7F8C8D"))
+        story.append(Paragraph("3. Ticket Severity Distribution", sub_style))
+        t_sev_data = metrics_and_trends["severity_distribution"]
+        story.append(self._get_styled_table(t_sev_data, [1.44 * inch] * 5, "#7F8C8D"))
 
-        story.append(Paragraph("3. Deadline Performance (Trend)", sub_style))
-        if deadline_trend.exists():
-            dead_data = [["Deadline Date", "Missed", "On Time", "Before Time"]]
-            for d in deadline_trend[:10]:
-                dead_data.append(
-                    [
-                        d["day"].strftime("%Y-%m-%d"),
-                        d["missed"],
-                        d["on_time"],
-                        d["before_time"],
-                    ]
-                )
-            story.append(get_styled_table(dead_data, [1.8 * inch] * 4, "#E67E22"))
-        else:
-            story.append(
-                Paragraph(
-                    "<i>No deadline data available for this period.</i>",
-                    styles["Italic"],
-                )
-            )
+        story.append(Paragraph("4. Deadline Performance", sub_style))
+        t_dead_data = metrics_and_trends["trends"]
+        story.append(self._get_styled_table(t_dead_data, [1.8 * inch] * 4, "#E67E22"))
 
         story.append(PageBreak())
-        story.append(Paragraph("4. Detailed Task Log", sub_style))
+        
+        story.append(Paragraph("5. Detailed Ticket Log", sub_style))
         log_data = [["SN", "Ticket", "Key", "Status", "Severity", "Deadline"]]
 
         for i, t in enumerate(initial_queryset, 1):
@@ -1103,7 +1037,7 @@ class ReportGenerator:
             1.0 * inch,
             1.2 * inch,
         ]
-        story.append(get_styled_table(log_data, log_widths, "#34495E"))
+        story.append(self._get_styled_table(log_data, log_widths, "#34495E"))
 
         def footer(canvas, doc):
             canvas.saveState()
