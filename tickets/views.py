@@ -21,7 +21,7 @@ from tickets.filters import TicketFilter
 from tickets.models import Ticket, TicketSubscriber
 from tickets.permissions import (
     CanUpdateTicketRestrictions,
-    IsActiveProjectMember,
+    HasTicketAccess,
     IsProjectActive,
     IsProjectAdmin,
 )
@@ -47,7 +47,6 @@ class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     """
 
     serializer_class = TicketListSerializer
-    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = TicketFilter
 
@@ -123,11 +122,11 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             permission_classes = [
                 IsAuthenticated,
                 IsProjectActive,
-                IsActiveProjectMember,
+                HasTicketAccess,
             ]
 
         else:
-            permission_classes = [IsAuthenticated, IsActiveProjectMember]
+            permission_classes = [IsAuthenticated, HasTicketAccess]
 
         return [permission() for permission in permission_classes]
 
@@ -700,18 +699,11 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         user_jql = request.data.get("jql", None)
         next_token = request.data.get("nextPageToken", None)
 
-        existing_jira_keys = list(
-            Ticket.objects.filter(project=project)
-            .exclude(jira_key__isnull=True)
-            .exclude(jira_key="")
-            .values_list("jira_key", flat=True)
+        existing_jira_keys = Ticket.objects.filter(project=project).values_list(
+            "jira_key", flat=True
         )
 
-        local_user_account_ids = list(
-            User.objects.exclude(jiraID__isnull=True)
-            .exclude(jiraID="")
-            .values_list("jiraID", flat=True)
-        )
+        local_user_account_ids = User.objects.values_list("jiraID", flat=True)
 
         if not local_user_account_ids:
             return Response(

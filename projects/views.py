@@ -43,7 +43,6 @@ class ProjectViewSet(
     with custom logic for integrating with Jira during project creation.
     """
 
-    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
 
     def filter_queryset(self, queryset):
@@ -111,7 +110,7 @@ class ProjectViewSet(
             "archive_project",
             "unarchive_project",
         ]:
-            return [IsAdmin()]
+            return [IsAdmin(), IsAuthenticated()]
         return super().get_permissions()
 
     def create(self, request, *args, **kwargs):
@@ -191,9 +190,7 @@ class ProjectViewSet(
         Updates project details locally and syncs changes to Jira.
         """
         instance = self.get_object()
-        serializer = self.get_serializer(
-            instance, data=request.data, partial=True
-        )
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
         key = instance.key
@@ -336,14 +333,10 @@ class ProjectViewSet(
             raise ParseError("You are not invited to this project")
 
         if pm_instance.status == ProjectMember.Status.ACTIVE:
-            raise ParseError(
-                "You are already an active member of this project"
-            )
+            raise ParseError("You are already an active member of this project")
 
         if pm_instance.status != ProjectMember.Status.INVITED:
-            raise ParseError(
-                "There is no pending invitation for you to respond to"
-            )
+            raise ParseError("There is no pending invitation for you to respond to")
 
         pm_instance.status = new_status
         pm_instance.save(update_fields=["status"])
@@ -459,7 +452,7 @@ class ProjectViewSet(
                 if pm_member.role != ProjectMember.Role.ADMIN:
                     pm_member.role = ProjectMember.Role.ADMIN
                     pm_member.save()
-                
+
                 pm_admin.status = ProjectMember.Status.REVOKED
                 pm_admin.save()
 
@@ -530,9 +523,8 @@ class ProjectViewSet(
             raise NotFound("Project does not exist")
 
         active_members_subquery = ProjectMember.objects.filter(
-            project=project,
-            status=ProjectMember.Status.ACTIVE
-        ).values('member_id')
+            project=project, status=ProjectMember.Status.ACTIVE
+        ).values("member_id")
 
         members = User.objects.exclude(
             id__in=Subquery(active_members_subquery)
@@ -679,9 +671,7 @@ class ProjectViewSet(
             timeline = now + timedelta(seconds=history_time)
             data["ticket_summary"] = base_qs.aggregate(
                 completed=Count("id", filter=Q(status=4)),
-                missed_deadline=Count(
-                    "id", filter=Q(deadline__lt=now) & ~Q(status=4)
-                ),
+                missed_deadline=Count("id", filter=Q(deadline__lt=now) & ~Q(status=4)),
                 total=Count("id"),
                 near_deadline=Count(
                     "id",
@@ -689,11 +679,14 @@ class ProjectViewSet(
                 ),
             )
 
-        base_qs = base_qs.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt, deadline__isnull=False)
+        base_qs = base_qs.filter(
+            deadline__date__gte=start_dt,
+            deadline__date__lte=end_dt,
+            deadline__isnull=False,
+        )
 
         if not section or section in ["deadline"]:
             deadline_qs = base_qs
-
             data["deadline_chart"] = (
                 deadline_qs.annotate(day=TruncDay("deadline"))
                 .values("day")
@@ -754,7 +747,7 @@ class ProjectViewSet(
         end_date = query.get("end-date") if query and query.get("end-date") else None
         if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-        user_tz = request.headers.get('x-timezone')
+        user_tz = request.headers.get("x-timezone")
         project_key = Project.objects.get(id=pk).key
         report_generator = ReportGenerator(
             start_date=start_date, end_date=end_date, tz_name=user_tz

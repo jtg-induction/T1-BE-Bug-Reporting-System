@@ -17,24 +17,24 @@ class IsProjectActive(permissions.BasePermission):
 
         project_id = view.kwargs.get("project_id")
         if not project_id:
-            return True
+            return False
 
         return Project.objects.filter(
             id=project_id, status=Project.Status.ACTIVE
         ).exists()
 
 
-class IsActiveProjectMember(permissions.BasePermission):
+class HasTicketAccess(permissions.BasePermission):
     """
     Ensures the user is an active member of the project.
     """
 
-    message = "You do not have permission to view  this project's tickets."
+    message = "You do not have permission to view this project's tickets."
 
     def has_permission(self, request, view):
         project_id = view.kwargs.get("project_id")
         if not project_id:
-            return True
+            return False
 
         return ProjectMember.objects.filter(
             project_id=project_id,
@@ -53,7 +53,7 @@ class IsProjectAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
         project_id = view.kwargs.get("project_id")
         if not project_id:
-            return True
+            return False
 
         return ProjectMember.objects.filter(
             project_id=project_id,

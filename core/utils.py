@@ -93,6 +93,7 @@ class JiraClient:
         """
         url = f"{self.base_url}{endpoint}"
         response_data = None
+
         try:
             response = self.session.request(method, url, timeout=30, **kwargs)
 
@@ -100,40 +101,44 @@ class JiraClient:
                 response_data = response.json() if response.text else {}
             except ValueError:
                 raise JiraClientException(
-                    f"Jira returned invalid JSON: {response.text[:200]}",
+                    "Received an invalid response format from Jira.",
                     status_code=response.status_code,
                 )
 
             if not (200 <= response.status_code < 300):
+                error_msg = (
+                    "An unexpected error occurred while communicating with Jira."
+                )
+
                 if isinstance(response_data, dict):
                     error_messages = response_data.get("errorMessages", [])
-                    error_msg = (
-                        error_messages[0] if error_messages else "Unknown Jira Error"
-                    )
-
                     field_errors = response_data.get("errors", {})
-                else:
-                    error_msg = "Unknown Jira Error"
-                    field_errors = {}
 
-                if field_errors:
-                    if error_msg == "Unknown Jira Error":
-                        error_msg = field_errors
-                    else:
-                        error_msg = f"{error_msg}. Field errors: {field_errors}"
+                    friendly_msgs = []
+
+                    if error_messages:
+                        friendly_msgs.extend(error_messages)
+
+                    if field_errors:
+                        for field, error in field_errors.items():
+                            clean_field = field.replace("_", " ").capitalize()
+                            friendly_msgs.append(f"{clean_field}: {error}")
+
+                    if friendly_msgs:
+                        error_msg = " | ".join(friendly_msgs)
 
                 raise JiraClientException(
-                    f"Jira API Error: {error_msg}",
+                    error_msg,
                     status_code=response.status_code,
                     response_data=response_data,
                 )
 
             return response_data
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             raise JiraClientException(
-                f"Network error while contacting Jira: {e}"
-            ) from e
+                "Network error: Unable to reach Jira. Please check your connection or Jira URL."
+            )
 
     @staticmethod
     def markdown_to_adf(text):
@@ -590,6 +595,9 @@ class JiraClient:
         Allows an optional custom JQL string to further filter the results.
         """
         jql = f'project="{project_key}"'
+
+        if additional_jql:
+            jql += f" AND ({additional_jql})"
 
         endpoint = "/rest/api/3/search/jql"
         payload = {

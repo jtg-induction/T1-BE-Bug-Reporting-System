@@ -4,11 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from comments.models import Comment
-from comments.permissions import (
-    IsActiveProjectMember,
-    IsCommentAuthorOrReadOnly,
-    IsProjectActive,
-)
+from comments.permissions import IsActiveMemberAndProjectActive, IsWriteAccessOrReadOnly
 from comments.serializers import CommentSerializer
 from core.utils import JiraClient, JiraClientException
 from tickets.models import Ticket
@@ -20,18 +16,11 @@ class CommentViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = CommentSerializer
-
-    def get_permissions(self):
-        """
-        Instantiates and returns the list of permissions that this view requires.
-        """
-        permission_classes = [
-            IsAuthenticated,
-            IsActiveProjectMember,
-            IsCommentAuthorOrReadOnly,
-            IsProjectActive,
-        ]
-        return [permission() for permission in permission_classes]
+    permission_classes = [
+        IsAuthenticated,
+        IsActiveMemberAndProjectActive,
+        IsWriteAccessOrReadOnly,
+    ]
 
     def get_queryset(self):
         """
