@@ -107,12 +107,12 @@ class UserAPIViewSet(
                 else None
             )
 
-        initial_queryset.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt)
+        initial_queryset = initial_queryset.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt, deadline__isnull=False)
 
         data = {}
 
         if not section or section == "deadline":
-            deadline_qs = initial_queryset.filter(deadline__isnull=False)
+            deadline_qs = initial_queryset
 
             data["deadline_chart"] = (
                 deadline_qs.annotate(day=TruncDay("deadline"))

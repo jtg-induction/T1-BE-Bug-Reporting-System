@@ -37,8 +37,8 @@ class CommentViewSet(viewsets.ModelViewSet):
         """
         Retrieves comments strictly for the ticket specified in the URL.
         """
-        ticket_id = self.kwargs.get("ticket_id")
-        project_id = self.kwargs.get("project_id")
+        ticket_id = self.kwargs.get("ticket_pk")
+        project_id = self.kwargs.get("project_pk")
         return Comment.objects.filter(
             ticket_id=ticket_id,
             ticket__project_id=project_id,
@@ -48,8 +48,8 @@ class CommentViewSet(viewsets.ModelViewSet):
         """
         Creates a local comment and syncs it to the associated Jira issue.
         """
-        ticket_id = self.kwargs.get("ticket_id")
-        project_id = self.kwargs.get("project_id")
+        ticket_id = self.kwargs.get("ticket_pk")
+        project_id = self.kwargs.get("project_pk")
         ticket = get_object_or_404(
             Ticket.objects.select_related("project"),
             id=ticket_id,

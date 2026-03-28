@@ -689,10 +689,10 @@ class ProjectViewSet(
                 ),
             )
 
-        base_qs = base_qs.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt)
+        base_qs = base_qs.filter(deadline__date__gte=start_dt, deadline__date__lte=end_dt, deadline__isnull=False)
 
         if not section or section in ["deadline"]:
-            deadline_qs = base_qs.filter(deadline__isnull=False)
+            deadline_qs = base_qs
 
             data["deadline_chart"] = (
                 deadline_qs.annotate(day=TruncDay("deadline"))

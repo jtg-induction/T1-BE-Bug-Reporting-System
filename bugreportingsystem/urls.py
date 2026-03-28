@@ -20,7 +20,7 @@ from django.urls import include, path
 
 api_urls = [
     path("users/", include("users.urls")),
-    path("projects/", include("projects.urls")),
+    path("", include("projects.urls")),
     path("", include("core.urls")),
     path("", include("tickets.urls")),
     path("", include("comments.urls")),

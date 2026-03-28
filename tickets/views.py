@@ -80,7 +80,6 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
     Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .
     """
 
-    lookup_url_kwarg = "ticket_id"
     filter_backends = [DjangoFilterBackend]
     filterset_class = TicketFilter
 
@@ -101,7 +100,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         Retrieves all tickets associated with the given project ID.
         """
         return Ticket.objects.filter(
-            project_id=self.kwargs.get("project_id"),
+            project_id=self.kwargs.get("project_pk"),
             project__project_members__member=self.request.user,
             project__project_members__status=ProjectMember.Status.ACTIVE,
         ).select_related("assignee", "reporter", "project")
@@ -137,7 +136,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         Creates a new ticket within a project and syncs it to Jira.
         Sets up initial subscriptions and schedules deadline reminders.
         """
-        project_id = self.kwargs.get("project_id")
+        project_id = self.kwargs.get("project_pk")
         project = get_object_or_404(Project, id=project_id)
         user = request.user
 
@@ -245,7 +244,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["post"])
-    def subscribe(self, request, project_id=None, ticket_id=None):
+    def subscribe(self, request, project_pk=None, pk=None):
         """
         Subscribes the authenticated user to the ticket and notifies other subscribers.
         """
@@ -271,7 +270,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def unsubscribe(self, request, project_id=None, ticket_id=None):
+    def unsubscribe(self, request, project_pk=None, pk=None):
         """
         Unsubscribes the authenticated user from the ticket.
         """
@@ -666,12 +665,12 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["get"], url_path="movable_projects")
-    def movable_projects(self, request, project_id=None, ticket_id=None):
+    def movable_projects(self, request, project_pk=None, pk=None):
         """
         Returns a list of active projects sharing the same Jira instance
         where the user has an Admin role, allowing for ticket transfers.
         """
-        current_project = get_object_or_404(Project, id=project_id)
+        current_project = get_object_or_404(Project, id=project_pk)
 
         admin_project_ids = ProjectMember.objects.filter(
             member=request.user,
@@ -688,14 +687,14 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="jira-import-list")
-    def jira_import_list(self, request, project_id=None):
+    def jira_import_list(self, request, project_pk=None):
         """
         Fetches tickets from Jira for the current project, with an optional custom JQL filter
         sent in the request body.
 
         Expected payload: {"jql": 'status="In Progress"',"nextPageToken":"token"} (optional)
         """
-        project = get_object_or_404(Project, id=project_id)
+        project = get_object_or_404(Project, id=project_pk)
         user = request.user
 
         user_jql = request.data.get("jql", None)
@@ -770,13 +769,13 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=False, methods=["post"], url_path="import-ticket")
-    def import_ticket(self, request, project_id=None):
+    def import_ticket(self, request, project_pk=None):
         """
         Imports a specific ticket from Jira into the local database,
         including its full comment history, while protecting DB connections.
         Expects a payload like {"jira_key": "EX4-11"}.
         """
-        project = get_object_or_404(Project, id=project_id)
+        project = get_object_or_404(Project, id=project_pk)
         user = request.user
         jira_identifier = request.data.get("jira_key")
 
