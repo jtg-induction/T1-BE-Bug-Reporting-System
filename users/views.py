@@ -90,6 +90,9 @@ class UserAPIViewSet(
         except (pytz.UnknownTimeZoneError, AttributeError):
             user_tz = timezone.get_default_timezone()
 
+        if user_tz.zone == "Asia/Calcutta":
+            user_tz = pytz.timezone("Asia/Kolkata")
+
         initial_queryset = Ticket.objects.filter(assignee_id=pk)
 
         start_date = query.get("start-date")

@@ -643,6 +643,9 @@ class ProjectViewSet(
         except (pytz.UnknownTimeZoneError, AttributeError):
             user_tz = timezone.get_default_timezone()
 
+        if user_tz.zone == "Asia/Calcutta":
+            user_tz = pytz.timezone("Asia/Kolkata")
+
         base_qs = Ticket.objects.filter(project__id=pk)
 
         user_ids_raw = query.get("user-ids", "")
