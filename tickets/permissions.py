@@ -15,7 +15,7 @@ class IsProjectActive(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        project_id = view.kwargs.get("project_id")
+        project_id = view.kwargs.get("project_pk")
         if not project_id:
             return False
 
@@ -32,7 +32,7 @@ class HasTicketAccess(permissions.BasePermission):
     message = "You do not have permission to view this project's tickets."
 
     def has_permission(self, request, view):
-        project_id = view.kwargs.get("project_id")
+        project_id = view.kwargs.get("project_pk")
         if not project_id:
             return False
 
@@ -51,7 +51,7 @@ class IsProjectAdmin(permissions.BasePermission):
     message = "Admin role required."
 
     def has_permission(self, request, view):
-        project_id = view.kwargs.get("project_id")
+        project_id = view.kwargs.get("project_pk")
         if not project_id:
             return False
 

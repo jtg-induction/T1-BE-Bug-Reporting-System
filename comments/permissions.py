@@ -12,8 +12,8 @@ class IsActiveMemberAndProjectActive(permissions.BasePermission):
     """
 
     def has_permission(self, request, view):
-        project_id = view.kwargs.get("project_id")
-        ticket_id = view.kwargs.get("ticket_id")
+        project_id = view.kwargs.get("project_pk")
+        ticket_id = view.kwargs.get("ticket_pk")
 
         if not project_id or not ticket_id:
             return False

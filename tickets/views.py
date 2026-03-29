@@ -873,7 +873,10 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             comments_response = jira_client.get_ticket_comments(actual_jira_key)
             jira_comments_data = comments_response.get("comments", [])
         except Exception as e:
-            print(f"Warning: Failed to pre-fetch comments for {actual_jira_key}: {e}")
+            return Response(
+                {"error": "Failed to save the imported ticket.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         try:
             with transaction.atomic():
