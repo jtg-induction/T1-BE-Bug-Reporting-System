@@ -9,8 +9,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.filters import OrderingFilter
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -18,8 +17,14 @@ from comments.models import Comment
 from core.utils import JiraClient, JiraClientException
 from projects.models import Project, ProjectMember
 from projects.serializers import ProjectSerializer
-from tickets.filters import TicketFilterMixin
+from tickets.filters import TicketFilter
 from tickets.models import Ticket, TicketSubscriber
+from tickets.permissions import (
+    CanUpdateTicketRestrictions,
+    HasTicketAccess,
+    IsProjectActive,
+    IsProjectAdmin,
+)
 from tickets.serializers import (
     TicketListSerializer,
     TicketReadSerializer,
@@ -36,15 +41,14 @@ from tickets.tasks import (
 User = get_user_model()
 
 
-class UserTicketViewSet(
-    TicketFilterMixin, mixins.ListModelMixin, viewsets.GenericViewSet
-):
+class UserTicketViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     """
     ViewSet for listing tickets associated with the authenticated user.
     """
 
     serializer_class = TicketListSerializer
-    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TicketFilter
 
     def get_queryset(self):
         """
@@ -68,33 +72,15 @@ class UserTicketViewSet(
             .order_by("-created_at")
         )
 
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    ordering_fields = [
-        "id",
-        "title",
-        "reporter__email",
-        "assignee__email",
-        "severity",
-        "status",
-        "deadline",
-        "created_at",
-    ]
 
-    field_maps = {
-        "list": {
-            "reporter": "reporter__email",
-            "assignee": "assignee__email",
-        }
-    }
-
-
-class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
+class ProjectTicketViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing tickets within a specific project context.
     Provides CRUD operations and actions like subscribe/unsubscribe, move ticket to another project, importing ticket from Jira .
     """
 
-    lookup_url_kwarg = "ticket_id"
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TicketFilter
 
     def get_serializer_class(self):
         """
@@ -113,55 +99,45 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         Retrieves all tickets associated with the given project ID.
         """
         return Ticket.objects.filter(
-            project_id=self.kwargs.get("project_id"),
+            project_id=self.kwargs.get("project_pk"),
             project__project_members__member=self.request.user,
             project__project_members__status=ProjectMember.Status.ACTIVE,
         ).select_related("assignee", "reporter", "project")
 
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
-    ordering_fields = [
-        "id",
-        "title",
-        "reporter__email",
-        "assignee__email",
-        "severity",
-        "status",
-        "deadline",
-        "created_at",
-    ]
+    def get_permissions(self):
+        """
+        Dynamically applies permissions based on the action.
+        """
+        if self.action in ["create", "destroy", "import_ticket", "jira_import_list"]:
+            permission_classes = [IsAuthenticated, IsProjectActive, IsProjectAdmin]
 
-    field_maps = {
-        "list": {
-            "reporter": "reporter__email",
-            "assignee": "assignee__email",
-        }
-    }
+        elif self.action in ["update", "partial_update"]:
+            permission_classes = [
+                IsAuthenticated,
+                IsProjectActive,
+                CanUpdateTicketRestrictions,
+            ]
+
+        elif self.action in ["subscribe", "unsubscribe"]:
+            permission_classes = [
+                IsAuthenticated,
+                IsProjectActive,
+                HasTicketAccess,
+            ]
+
+        else:
+            permission_classes = [IsAuthenticated, HasTicketAccess]
+
+        return [permission() for permission in permission_classes]
 
     def create(self, request, *args, **kwargs):
         """
         Creates a new ticket within a project and syncs it to Jira.
         Sets up initial subscriptions and schedules deadline reminders.
         """
-        project_id = self.kwargs.get("project_id")
+        project_id = self.kwargs.get("project_pk")
         project = get_object_or_404(Project, id=project_id)
         user = request.user
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot add tickets to an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied(
-                "You do not have permission to create tickets in this project. Admin role required."
-            )
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -190,8 +166,8 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 )
 
                 assignee_id = (
-                    ticket.assignee.jiraID
-                    if ticket.assignee and hasattr(ticket.assignee, "jiraID")
+                    ticket.assignee.jira_id
+                    if ticket.assignee and hasattr(ticket.assignee, "jira_id")
                     else None
                 )
                 deadline_str = (
@@ -200,6 +176,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 severity_str = (
                     ticket.get_severity_display() if ticket.severity else None
                 )
+                status_str = ticket.get_status_display() if ticket.status else None
 
                 jira_response = jira_client.create_ticket(
                     project_key=project.key,
@@ -208,6 +185,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                     severity=severity_str,
                     assignee_id=assignee_id,
                     deadline=deadline_str,
+                    status=status_str,
                 )
                 ticket.jira_key = jira_response.get("key")
                 ticket.save(update_fields=["jira_key"])
@@ -265,7 +243,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["post"])
-    def subscribe(self, request, project_id=None, ticket_id=None):
+    def subscribe(self, request, project_pk=None, pk=None):
         """
         Subscribes the authenticated user to the ticket and notifies other subscribers.
         """
@@ -291,7 +269,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def unsubscribe(self, request, project_id=None, ticket_id=None):
+    def unsubscribe(self, request, project_pk=None, pk=None):
         """
         Unsubscribes the authenticated user from the ticket.
         """
@@ -430,8 +408,8 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             update_kwargs["severity"] = ticket.get_severity_display()
 
         if "assignee" in request_data:
-            if ticket.assignee and hasattr(ticket.assignee, "jiraID"):
-                update_kwargs["assignee_id"] = ticket.assignee.jiraID
+            if ticket.assignee and hasattr(ticket.assignee, "jira_id"):
+                update_kwargs["assignee_id"] = ticket.assignee.jira_id
             else:
                 update_kwargs["clear_assignee"] = True
 
@@ -534,41 +512,21 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         if "deadline" in data and data["deadline"] == "":
             data["deadline"] = None
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot update tickets in an inactive project."}
-            )
-
-        is_reporter = ticket.reporter == user
-        is_assignee = ticket.assignee == user
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
         new_project_id = data.pop("project_id", None)
         if new_project_id and str(new_project_id) != str(project.id):
+            is_admin = ProjectMember.objects.filter(
+                project=project,
+                member=user,
+                role=ProjectMember.Role.ADMIN,
+                status=ProjectMember.Status.ACTIVE,
+            ).exists()
             return self._handle_project_move(
                 request, ticket, project, new_project_id, user, is_admin
             )
 
-        if not (is_reporter or is_assignee or is_admin):
-            raise PermissionDenied("You do not have permission to edit this ticket.")
-
-        if not is_admin and not is_reporter:
-            for field in data.keys():
-                if field != "status":
-                    raise PermissionDenied(
-                        f"Assignees can only update the status. Cannot edit '{field}'."
-                    )
-
         new_status_val = data.get("status")
         status_changed = False
         if new_status_val is not None and int(new_status_val) != ticket.status:
-            if int(new_status_val) == Ticket.Status.CLOSED and not is_reporter:
-                raise PermissionDenied("Only the reporter can mark a ticket as Closed.")
             status_changed = True
 
         general_data = data.copy()
@@ -668,21 +626,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot delete tickets in an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied("You do not have permission to delete this ticket.")
-
         try:
             jira_url = project.jira_url
             jira_token = user.jira_access_token
@@ -721,18 +664,19 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["get"], url_path="movable_projects")
-    def movable_projects(self, request, project_id=None, ticket_id=None):
+    def movable_projects(self, request, project_pk=None, pk=None):
         """
         Returns a list of active projects sharing the same Jira instance
         where the user has an Admin role, allowing for ticket transfers.
         """
-        current_project = get_object_or_404(Project, id=project_id)
+        current_project = get_object_or_404(Project, id=project_pk)
 
         admin_project_ids = ProjectMember.objects.filter(
             member=request.user,
             role=ProjectMember.Role.ADMIN,
             status=ProjectMember.Status.ACTIVE,
         ).values_list("project_id", flat=True)
+
         compatible_projects = Project.objects.filter(
             id__in=admin_project_ids, status=2, jira_url=current_project.jira_url
         ).exclude(id=current_project.id)
@@ -742,40 +686,52 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="jira-import-list")
-    def jira_import_list(self, request, project_id=None):
+    def jira_import_list(self, request, project_pk=None):
         """
         Fetches tickets from Jira for the current project, with an optional custom JQL filter
         sent in the request body.
 
-        Expected payload: {"jql": 'status="In Progress"'} (optional)
+        Expected payload: {"jql": 'status="In Progress"',"nextPageToken":"token"} (optional)
         """
-        project = get_object_or_404(Project, id=project_id)
+        project = get_object_or_404(Project, id=project_pk)
         user = request.user
-        jql = request.data.get("jql", None)
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot import tickets from an inactive project."}
+        user_jql = request.data.get("jql", None)
+        next_token = request.data.get("nextPageToken", None)
+
+        existing_jira_keys = Ticket.objects.filter(project=project).values_list(
+            "jira_key", flat=True
+        )
+
+        local_user_account_ids = User.objects.values_list("jira_id", flat=True)
+
+        if not local_user_account_ids:
+            return Response(
+                {"results": [], "nextPageToken": None}, status=status.HTTP_200_OK
             )
 
-        is_member = ProjectMember.objects.filter(
-            project=project, member=user, status=ProjectMember.Status.ACTIVE
-        ).exists()
+        reporter_list = ",".join([f'"{aid}"' for aid in local_user_account_ids])
+        dynamic_jql = f"reporter in ({reporter_list})"
 
-        if not is_member:
-            raise PermissionDenied(
-                "You do not have permission to view tickets for this project."
-            )
+        if existing_jira_keys:
+            key_list = ",".join([f'"{key}"' for key in existing_jira_keys])
+            dynamic_jql += f" AND issueKey not in ({key_list})"
+
+        if user_jql:
+            dynamic_jql += f" AND ({user_jql})"
 
         try:
             jira_client = JiraClient(
                 project.jira_url, user.email, user.jira_access_token
             )
-
-            response_data = jira_client.get_project_issues(
-                project.key, additional_jql=jql
+            response_data = jira_client.get_project_issues_page(
+                project_key=project.key,
+                additional_jql=dynamic_jql,
+                max_results=15,
+                next_token=next_token,
             )
             jira_issues = response_data.get("issues", [])
+            new_next_token = response_data.get("nextPageToken", None)
 
         except Exception as e:
             return Response(
@@ -783,62 +739,35 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        existing_jira_keys = set(
-            Ticket.objects.filter(project=project)
-            .exclude(jira_key__isnull=True)
-            .exclude(jira_key="")
-            .values_list("jira_key", flat=True)
-        )
-
-        local_user_account_ids = set(
-            User.objects.exclude(jiraID__isnull=True)
-            .exclude(jiraID="")
-            .values_list("jiraID", flat=True)
-        )
-
         importable_tickets = []
-
         for issue in jira_issues:
-            jira_key = issue.get("key")
-            jira_id = issue.get("id")
             fields = issue.get("fields", {})
-
-            if jira_key in existing_jira_keys:
-                continue
-
-            reporter_account_id = fields.get("reporter", {}).get("accountId")
-
-            if (
-                not reporter_account_id
-                or reporter_account_id not in local_user_account_ids
-            ):
-                continue
-
             raw_description = fields.get("description")
-            text_description = (
-                JiraClient.extract_text_from_adf(raw_description)
-                if raw_description
-                else ""
-            )
+
             importable_tickets.append(
                 {
-                    "jira_id": jira_id,
-                    "jira_key": jira_key,
+                    "jira_id": issue.get("id"),
+                    "jira_key": issue.get("key"),
                     "title": fields.get("summary", ""),
-                    "description": text_description,
+                    "description": JiraClient.extract_text_from_adf(raw_description)
+                    if raw_description
+                    else "",
                 }
             )
 
-        return Response(importable_tickets, status=status.HTTP_200_OK)
+        return Response(
+            {"results": importable_tickets, "nextPageToken": new_next_token},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["post"], url_path="import-ticket")
-    def import_ticket(self, request, project_id=None):
+    def import_ticket(self, request, project_pk=None):
         """
         Imports a specific ticket from Jira into the local database,
         including its full comment history, while protecting DB connections.
         Expects a payload like {"jira_key": "EX4-11"}.
         """
-        project = get_object_or_404(Project, id=project_id)
+        project = get_object_or_404(Project, id=project_pk)
         user = request.user
         jira_identifier = request.data.get("jira_key")
 
@@ -846,23 +775,6 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             return Response(
                 {"error": "The 'jira_key' field is required in the payload."},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot import tickets into an inactive project."}
-            )
-
-        is_admin = ProjectMember.objects.filter(
-            project=project,
-            member=user,
-            role=ProjectMember.Role.ADMIN,
-            status=ProjectMember.Status.ACTIVE,
-        ).exists()
-
-        if not is_admin:
-            raise PermissionDenied(
-                "You do not have permission to import tickets. Admin role required."
             )
 
         if Ticket.objects.filter(project=project, jira_key=jira_identifier).exists():
@@ -901,7 +813,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        reporter_user = User.objects.filter(jiraID=reporter_account_id).first()
+        reporter_user = User.objects.filter(jira_id=reporter_account_id).first()
         if not reporter_user:
             return Response(
                 {"error": "The Jira reporter is not registered in our system."},
@@ -912,7 +824,7 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
         assignee_user = None
         if assignee_dict:
             assignee_account_id = assignee_dict.get("accountId")
-            assignee_user = User.objects.filter(jiraID=assignee_account_id).first()
+            assignee_user = User.objects.filter(jira_id=assignee_account_id).first()
 
         title = fields.get("summary", "Imported Ticket")
         raw_description = fields.get("description")
@@ -961,7 +873,10 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
             comments_response = jira_client.get_ticket_comments(actual_jira_key)
             jira_comments_data = comments_response.get("comments", [])
         except Exception as e:
-            print(f"Warning: Failed to pre-fetch comments for {actual_jira_key}: {e}")
+            return Response(
+                {"error": "Failed to save the imported ticket.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         try:
             with transaction.atomic():
@@ -999,15 +914,18 @@ class ProjectTicketViewSet(TicketFilterMixin, viewsets.ModelViewSet):
                     c_jira_id = jira_comment.get("id")
                     c_author_dict = jira_comment.get("author", {})
                     c_author_account_id = c_author_dict.get("accountId")
-                    c_author_display_name = c_author_dict.get(
-                        "displayName", "Unknown Jira User"
-                    )
 
                     c_author_user = None
                     if c_author_account_id:
                         c_author_user = User.objects.filter(
-                            jiraID=c_author_account_id
+                            jira_id=c_author_account_id
                         ).first()
+                    if c_author_user:
+                        c_author_display_name = f"{c_author_user.first_name} {c_author_user.last_name}".strip()
+                    else:
+                        c_author_display_name = c_author_dict.get(
+                            "displayName", "Unknown Jira User"
+                        )
 
                     c_body_raw = jira_comment.get("body")
                     c_body_md = (

@@ -10,13 +10,13 @@ class TicketAdmin(admin.ModelAdmin):
         "assignee",
         "status",
         "reporter",
-        "isDeleted",
+        "is_deleted",
     )
     search_fields = ("title", "status", "assignee__email", "reporter__email")
 
 
 class TicketSubscriberAdmin(admin.ModelAdmin):
-    list_display = ("user", "ticket", "status", "isDeleted")
+    list_display = ("user", "ticket", "status", "is_deleted")
     search_fields = ("user__email", "ticket__title", "status")
 
 

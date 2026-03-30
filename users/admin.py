@@ -1,4 +1,5 @@
 from django.contrib import admin
+
 from users.models import CustomUser
 
 
@@ -9,7 +10,7 @@ class UserAdmin(admin.ModelAdmin):
         "last_name",
         "created_at",
         "last_login",
-        "isDeleted",
+        "is_deleted",
     )
     search_fields = ("email",)
 

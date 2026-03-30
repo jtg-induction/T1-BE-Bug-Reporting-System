@@ -5,9 +5,9 @@ from .models import Comment
 
 @admin.register(Comment)
 class CommentAdmin(admin.ModelAdmin):
-    list_display = ("id", "ticket", "author_name", "created_at", "isDeleted")
+    list_display = ("id", "ticket", "author_name", "created_at", "is_deleted")
 
-    list_filter = ("isDeleted", "created_at")
+    list_filter = ("is_deleted", "created_at")
 
     search_fields = ("description", "author_name", "ticket__title", "jira_id")
 

@@ -66,5 +66,8 @@ class CurrentUserSerializer(UserSerializer):
     """
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ["jiraID", "jira_access_token"]
-        extra_kwargs = {"jira_access_token": {"write_only": True}}
+        fields = UserSerializer.Meta.fields + ["jira_id", "jira_access_token"]
+        extra_kwargs = {
+            "jira_access_token": {"write_only": True},
+            "jira_id": {"write_only": True},
+        }

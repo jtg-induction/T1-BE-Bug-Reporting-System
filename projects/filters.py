@@ -101,11 +101,21 @@ class ProjectFilter(django_filters.FilterSet):
     key__ne = NotEqualFilter(field_name="key")
     key__noticontains = NotContainsFilter(field_name="key")
 
+    status = django_filters.CharFilter(field_name="status", lookup_expr="exact")
+    status__in = NumberInFilter(
+        field_name="status", lookup_expr="in"
+    )
+    status__ne = NotEqualFilter(field_name="status")
+    status__isnull = django_filters.BooleanFilter(
+        field_name="status", lookup_expr="isnull"
+    )
+
     ordering = django_filters.OrderingFilter(
         fields=(
             ("key", "key"),
             ("title", "title"),
             ("project_members__role", "project_role"),
+            ("status", "status")
         )
     )
 

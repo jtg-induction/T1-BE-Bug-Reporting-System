@@ -1,3 +1,4 @@
+import pytz
 from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
@@ -7,7 +8,7 @@ from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ParseError
+from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -63,7 +64,7 @@ class UserAPIViewSet(
 
     @action(detail=False, methods=["get"], url_path="tickets-summary")
     def tickets_summary(self, request):
-        timeline = timezone.now() - timedelta(seconds=history_time)
+        timeline = timezone.now() + timedelta(seconds=history_time)
         summary = Ticket.objects.filter(assignee=request.user).aggregate(
             completed=Count("id", filter=Q(status=4)),
             missed_deadline=Count(
@@ -82,6 +83,15 @@ class UserAPIViewSet(
         query = request.query_params
         now = timezone.now()
         filter_date_format = "%Y-%m-%d"
+        tz_name = self.request.headers.get("x-timezone")
+
+        try:
+            user_tz = pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            user_tz = timezone.get_default_timezone()
+
+        if user_tz.zone == "Asia/Calcutta":
+            user_tz = pytz.timezone("Asia/Kolkata")
 
         initial_queryset = Ticket.objects.filter(assignee_id=pk)
 
@@ -89,12 +99,12 @@ class UserAPIViewSet(
         end_date = query.get("end-date")
         section = query.get("section")
 
-        if start_date and end_date and start_date>end_date:
+        if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
 
         if not start_date and not end_date:
-            start_dt = (now - timedelta(days=now.weekday())).date()
-            end_dt = now.date()
+            start_dt = (now - timedelta(days=now.weekday() + 1)).date()
+            end_dt = (now + timedelta(days=6 - now.weekday())).date()
         else:
             start_dt = (
                 datetime.strptime(start_date, filter_date_format).date()
@@ -107,17 +117,19 @@ class UserAPIViewSet(
                 else None
             )
 
+        initial_queryset = initial_queryset.filter(
+            deadline__date__gte=start_dt,
+            deadline__date__lte=end_dt,
+            deadline__isnull=False,
+        )
+
         data = {}
 
         if not section or section == "deadline":
-            deadline_qs = initial_queryset.filter(deadline__isnull=False)
-            if start_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__gte=start_dt)
-            if end_dt:
-                deadline_qs = deadline_qs.filter(deadline__date__lte=end_dt)
+            deadline_qs = initial_queryset
 
             data["deadline_chart"] = (
-                deadline_qs.annotate(day=TruncDay("deadline"))
+                deadline_qs.annotate(day=TruncDay("deadline", tzinfo=user_tz))
                 .values("day")
                 .annotate(
                     missed=Count(
@@ -137,10 +149,6 @@ class UserAPIViewSet(
 
         if not section or section in ["status", "priority"]:
             created_qs = initial_queryset
-            if start_dt:
-                created_qs = created_qs.filter(created_at__date__gte=start_dt)
-            if end_dt:
-                created_qs = created_qs.filter(created_at__date__lte=end_dt)
 
             if not section or section == "status":
                 data["ticket_status"] = created_qs.aggregate(
@@ -170,20 +178,17 @@ class UserAPIViewSet(
             raise PermissionDenied("You can not download others' report")
 
         start_date = (
-            query.get("start-date")
-            if query and query.get("start-date")
-            else None
+            query.get("start-date") if query and query.get("start-date") else None
         )
-        end_date = (
-            query.get("end-date") if query and query.get("end-date") else None
-        )
-        if start_date and end_date and start_date>end_date:
+        end_date = query.get("end-date") if query and query.get("end-date") else None
+        user_tz = request.headers.get("x-timezone")
+        if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-        report_generator = ReportGenerator()
+        report_generator = ReportGenerator(
+            start_date=start_date, end_date=end_date, tz_name=user_tz
+        )
         buffer = report_generator.generate_user_performance_report(
             user=user,
-            start_date=start_date,
-            end_date=end_date,
         )
         return FileResponse(
             buffer,

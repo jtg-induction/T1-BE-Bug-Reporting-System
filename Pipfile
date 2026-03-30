@@ -17,8 +17,11 @@ requests = "==2.32.5"
 django-filter = "==25.2"
 reportlab = "4.4.10"
 celery=="5.6.2"
+pytz==2026.1.post1
+drf-nested-routers==0.95.0
 
 [dev-packages]
+django-dynamic-fixture = "==4.0.1"
 
 [requires]
 python_version = "3.12"

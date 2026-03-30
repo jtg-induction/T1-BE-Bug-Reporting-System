@@ -68,7 +68,7 @@ class CustomUser(BaseModel, AbstractBaseUser, PermissionsMixin):
     designation = models.CharField(max_length=6, choices=Designation.choices)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
-    jiraID = models.CharField(max_length=128, unique=True)
+    jira_id = models.CharField(max_length=128, unique=True)
     jira_access_token = EncryptedCharField(max_length=256, unique=True)
 
     objects = UserManager()
@@ -77,7 +77,7 @@ class CustomUser(BaseModel, AbstractBaseUser, PermissionsMixin):
         "first_name",
         "last_name",
         "designation",
-        "jiraID",
+        "jira_id",
         "jira_access_token",
     ]
 

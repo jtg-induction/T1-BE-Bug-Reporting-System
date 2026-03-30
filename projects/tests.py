@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pytest
+from ddf import G
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from requests.exceptions import RequestException
@@ -24,28 +25,19 @@ class ProjectViewSetTestCase(APITestCase):
         """
         self.login = reverse("core:login")
         self.list_url = reverse("project-list")
-        self.archived_url = f"{self.list_url}?status=archived"
-        self.user = User.objects.create_user(
-            first_name="test",
-            last_name="user",
-            email="test@testuser.com",
-            password="tester",
-            designation="M",
-            jiraID="abcd",
-            jira_access_token="test_access_token",
-        )
-        self.user2 = User.objects.create_user(
-            first_name="test2",
-            last_name="user2",
-            email="test2@testuser.com",
-            password="tester2",
-            designation="M",
-            jiraID="abcde",
-            jira_access_token="test_access_token2",
-        )
+        self.active_url = f"{self.list_url}?status=2"
+        self.archived_url = f"{self.list_url}?status=1"
+
+        self.user = G(User)
+        self.user.set_password("tester")
+        self.user.save()
+
+        self.user2 = G(User)
+        self.user2.set_password("tester2")
+        self.user2.save()
 
         response = self.client.post(
-            self.login, {"email": "test@testuser.com", "password": "tester"}
+            self.login, {"email": self.user.email, "password": "tester"}
         )
 
         if isinstance(response.data, dict):
@@ -61,7 +53,8 @@ class ProjectViewSetTestCase(APITestCase):
 
         self.client.credentials(HTTP_AUTHORIZATION="Bearer " + self.access)
 
-        self.active_project = Project.objects.create(
+        self.active_project = G(
+            Project,
             title="Active Project",
             description="Active description",
             status=Project.Status.ACTIVE,
@@ -70,7 +63,8 @@ class ProjectViewSetTestCase(APITestCase):
             jira_url="https://test.atlassian.net",
             jira_project_id="10000",
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user,
             inviter=self.user,
@@ -78,7 +72,8 @@ class ProjectViewSetTestCase(APITestCase):
             status=ProjectMember.Status.ACTIVE,
         )
 
-        self.archived_project = Project.objects.create(
+        self.archived_project = G(
+            Project,
             title="Archived Project",
             description="Archived description",
             status=Project.Status.ARCHIVED,
@@ -87,7 +82,8 @@ class ProjectViewSetTestCase(APITestCase):
             jira_url="https://test.atlassian.net",
             jira_project_id="10001",
         )
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.archived_project,
             member=self.user,
             inviter=self.user,
@@ -119,7 +115,7 @@ class ProjectViewSetTestCase(APITestCase):
         """
         Ensures a user can retrieve a list of their active projects.
         """
-        response = self.client.get(self.list_url)
+        response = self.client.get(self.active_url)
         self.assertEqual(200, response.status_code)
 
         actual_data = self._get_actual_data(response).get("results")
@@ -237,7 +233,7 @@ class ProjectViewSetTestCase(APITestCase):
         Verifies that a user can only see projects they are actively a member of.
         """
         response = self.client.post(
-            self.login, {"email": "test2@testuser.com", "password": "tester2"}
+            self.login, {"email": self.user2.email, "password": "tester2"}
         )
 
         if isinstance(response.data, dict):
@@ -274,7 +270,8 @@ class ProjectViewSetTestCase(APITestCase):
 
     def test_update_project_not_admin(self):
         """Ensures that non-admin members are forbidden from updating project details."""
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user2,
             inviter=self.user,
@@ -399,7 +396,8 @@ class ProjectViewSetTestCase(APITestCase):
 
     def test_accept_invite_success(self):
         """Confirms that a user can successfully accept a pending project invitation."""
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user2,
             inviter=self.user,
@@ -420,7 +418,8 @@ class ProjectViewSetTestCase(APITestCase):
 
     def test_reject_invite_success(self):
         """Confirms that a user can successfully reject a pending project invitation."""
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user2,
             inviter=self.user,
@@ -441,7 +440,8 @@ class ProjectViewSetTestCase(APITestCase):
 
     def test_revoke_member_success(self):
         """Verifies that an admin can successfully revoke a user's membership from a project."""
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user2,
             inviter=self.user,
@@ -461,7 +461,8 @@ class ProjectViewSetTestCase(APITestCase):
 
     def test_change_role_success(self):
         """Validates that an admin can successfully change the role of another project member."""
-        ProjectMember.objects.create(
+        G(
+            ProjectMember,
             project=self.active_project,
             member=self.user2,
             inviter=self.user,

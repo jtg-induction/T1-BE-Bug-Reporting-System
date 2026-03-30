@@ -1,13 +1,12 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
-from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from comments.models import Comment
+from comments.permissions import IsActiveMemberAndProjectActive, IsWriteAccessOrReadOnly
 from comments.serializers import CommentSerializer
 from core.utils import JiraClient, JiraClientException
-from projects.models import Project, ProjectMember
 from tickets.models import Ticket
 
 
@@ -17,36 +16,29 @@ class CommentViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = CommentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        IsActiveMemberAndProjectActive,
+        IsWriteAccessOrReadOnly,
+    ]
 
     def get_queryset(self):
         """
         Retrieves comments strictly for the ticket specified in the URL.
         """
-        ticket_id = self.kwargs.get("ticket_id")
-        project_id = self.kwargs.get("project_id")
+        ticket_id = self.kwargs.get("ticket_pk")
+        project_id = self.kwargs.get("project_pk")
         return Comment.objects.filter(
             ticket_id=ticket_id,
             ticket__project_id=project_id,
         ).select_related("author")
 
-    def _check_project_access(self, ticket, user):
-        """
-        Internal helper to ensure the user is an active member of the ticket's project.
-        """
-        is_member = ProjectMember.objects.filter(
-            project=ticket.project, member=user, status=ProjectMember.Status.ACTIVE
-        ).exists()
-
-        if not is_member:
-            raise PermissionDenied("You do not have access to this project's tickets.")
-
     def create(self, request, *args, **kwargs):
         """
         Creates a local comment and syncs it to the associated Jira issue.
         """
-        ticket_id = self.kwargs.get("ticket_id")
-        project_id = self.kwargs.get("project_id")
+        ticket_id = self.kwargs.get("ticket_pk")
+        project_id = self.kwargs.get("project_pk")
         ticket = get_object_or_404(
             Ticket.objects.select_related("project"),
             id=ticket_id,
@@ -55,12 +47,6 @@ class CommentViewSet(viewsets.ModelViewSet):
         user = request.user
         project = ticket.project
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot add comments to an inactive project."}
-            )
-
-        self._check_project_access(ticket, user)
         serializer = self.get_serializer(
             data=request.data, context={"request": request}
         )
@@ -115,15 +101,6 @@ class CommentViewSet(viewsets.ModelViewSet):
         project = ticket.project
         user = request.user
 
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot edit comments in an inactive project."}
-            )
-        self._check_project_access(ticket, user)
-
-        if comment.author != user:
-            raise PermissionDenied("You can only edit your own comments.")
-
         serializer = self.get_serializer(
             comment, data=request.data, partial=True, context={"request": request}
         )
@@ -177,18 +154,6 @@ class CommentViewSet(viewsets.ModelViewSet):
         ticket = comment.ticket
         project = ticket.project
         user = request.user
-
-        if project.status != Project.Status.ACTIVE:
-            raise ValidationError(
-                {"project": "Cannot delete comments in an inactive project."}
-            )
-
-        self._check_project_access(ticket, user)
-
-        if comment.author != user:
-            raise PermissionDenied(
-                "You do not have permission to delete this comment. Only the author can delete it."
-            )
 
         try:
             jira_url = project.jira_url

@@ -19,13 +19,13 @@ class SafeDeleteQuerySet(models.QuerySet):
         """
         for relation in self.model._meta.related_objects:
             if relation.on_delete == models.CASCADE:
-                if hasattr(relation.related_model, "isDeleted"):
+                if hasattr(relation.related_model, "is_deleted"):
                     related_queryset = relation.related_model.objects.filter(
                         **{f"{relation.remote_field.name}__in": self}
                     )
                     related_queryset.delete()
 
-        return self.update(isDeleted=True, updated_at=timezone.now())
+        return self.update(is_deleted=True, updated_at=timezone.now())
 
     def hard_delete(self, using=None, keep_parents=False):
         """
@@ -41,9 +41,9 @@ class SoftDeleteManager(models.Manager.from_queryset(SafeDeleteQuerySet)):
 
     def get_queryset(self):
         """
-        Returns a queryset of objects where isDeleted is False.
+        Returns a queryset of objects where is_deleted is False.
         """
-        return super().get_queryset().filter(isDeleted=False)
+        return super().get_queryset().filter(is_deleted=False)
 
 
 class BaseModel(models.Model):
@@ -54,7 +54,7 @@ class BaseModel(models.Model):
         created_at (DateTimeField): Timestamp of record creation.
         updated_at (DateTimeField): Timestamp of last update.
         updated_by (ForeignKey): Reference to the user who last modified the record.
-        isDeleted (BooleanField): Flag to indicate if the record is soft-deleted.
+        is_deleted (BooleanField): Flag to indicate if the record is soft-deleted.
     """
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -66,14 +66,14 @@ class BaseModel(models.Model):
         on_delete=models.SET_NULL,
         related_name="updated_%(class)s_set",
     )
-    isDeleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
 
     def delete(self, using=None, keep_parents=False):
         """
         Marks the instance as deleted without removing it from the DB.
         """
-        self.isDeleted = True
-        self.save(update_fields=["isDeleted", "updated_at"], using=using)
+        self.is_deleted = True
+        self.save(update_fields=["is_deleted", "updated_at"], using=using)
         for related_object in self._meta.related_objects:
             if related_object.on_delete == models.CASCADE and issubclass(
                 related_object.related_model, BaseModel

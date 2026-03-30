@@ -1,17 +1,21 @@
 from django.urls import include, path
-from rest_framework.routers import DefaultRouter
+from rest_framework_nested import routers
 
-from .views import ProjectTicketViewSet, UserTicketViewSet
+from projects.urls import project_router
+from tickets.views import ProjectTicketViewSet, UserTicketViewSet
 
-router = DefaultRouter()
-router.register(r"tickets", UserTicketViewSet, basename="user-tickets")
+router = routers.DefaultRouter()
+router.register(r'tickets', UserTicketViewSet, basename="user-tickets")
 
-router.register(
-    r"projects/(?P<project_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/tickets",
+project_router.register(
+    r'tickets',
     ProjectTicketViewSet,
-    basename="project-tickets",
+    basename='project-tickets',
 )
+
+ticket_router = routers.NestedDefaultRouter(project_router, r'tickets', lookup="ticket")
 
 urlpatterns = [
     path("", include(router.urls)),
+    path("", include(project_router.urls))
 ]
