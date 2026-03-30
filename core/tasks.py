@@ -74,12 +74,12 @@ def send_invitation_email(self, pid, title, email):
                         <!-- Bulletproof Button -->
                         <table cellspacing="4" cellpadding="0" border="0">
                             <tr>
-                                <td bgcolor="#00FF00" style="padding: 10px 20px; border-radius: 4px;">
+                                <td bgcolor="#2e7d32" style="padding: 10px 20px; border-radius: 4px;">
                                     <a href="{accept_url}" target="_blank" style="color: #ffffff; text-decoration: none; font-weight: bold; font-family: Arial, sans-serif;">
                                         Accept
                                     </a>
                                 </td>
-                                <td bgcolor="#FF0000" style="padding: 10px 20px; border-radius: 4px;">
+                                <td bgcolor="#d32f2f" style="padding: 10px 20px; border-radius: 4px;">
                                     <a href="{reject_url}" target="_blank" style="color: #ffffff; text-decoration: none; font-weight: bold; font-family: Arial, sans-serif;">
                                         Reject
                                     </a>

@@ -29,7 +29,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.admin_user = G(
             User,
             designation="M",
-            jiraID="admin-jira-id",
+            jira_id="admin-jira-id",
         )
         self.admin_user.set_password("tester")
         self.admin_user.save()
@@ -37,7 +37,7 @@ class ProjectTicketViewSetTestCase(APITestCase):
         self.dev_user = G(
             User,
             designation="SD",
-            jiraID="dev-jira-id",
+            jira_id="dev-jira-id",
         )
         self.dev_user.set_password("tester")
         self.dev_user.save()

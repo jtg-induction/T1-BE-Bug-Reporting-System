@@ -166,8 +166,8 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 )
 
                 assignee_id = (
-                    ticket.assignee.jiraID
-                    if ticket.assignee and hasattr(ticket.assignee, "jiraID")
+                    ticket.assignee.jira_id
+                    if ticket.assignee and hasattr(ticket.assignee, "jira_id")
                     else None
                 )
                 deadline_str = (
@@ -408,8 +408,8 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             update_kwargs["severity"] = ticket.get_severity_display()
 
         if "assignee" in request_data:
-            if ticket.assignee and hasattr(ticket.assignee, "jiraID"):
-                update_kwargs["assignee_id"] = ticket.assignee.jiraID
+            if ticket.assignee and hasattr(ticket.assignee, "jira_id"):
+                update_kwargs["assignee_id"] = ticket.assignee.jira_id
             else:
                 update_kwargs["clear_assignee"] = True
 
@@ -703,7 +703,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
             "jira_key", flat=True
         )
 
-        local_user_account_ids = User.objects.values_list("jiraID", flat=True)
+        local_user_account_ids = User.objects.values_list("jira_id", flat=True)
 
         if not local_user_account_ids:
             return Response(
@@ -813,7 +813,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        reporter_user = User.objects.filter(jiraID=reporter_account_id).first()
+        reporter_user = User.objects.filter(jira_id=reporter_account_id).first()
         if not reporter_user:
             return Response(
                 {"error": "The Jira reporter is not registered in our system."},
@@ -824,7 +824,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
         assignee_user = None
         if assignee_dict:
             assignee_account_id = assignee_dict.get("accountId")
-            assignee_user = User.objects.filter(jiraID=assignee_account_id).first()
+            assignee_user = User.objects.filter(jira_id=assignee_account_id).first()
 
         title = fields.get("summary", "Imported Ticket")
         raw_description = fields.get("description")
@@ -918,7 +918,7 @@ class ProjectTicketViewSet(viewsets.ModelViewSet):
                     c_author_user = None
                     if c_author_account_id:
                         c_author_user = User.objects.filter(
-                            jiraID=c_author_account_id
+                            jira_id=c_author_account_id
                         ).first()
                     if c_author_user:
                         c_author_display_name = f"{c_author_user.first_name} {c_author_user.last_name}".strip()

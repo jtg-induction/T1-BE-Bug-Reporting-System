@@ -24,7 +24,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             "date_of_birth",
             "designation",
             "phone",
-            "jiraID",
+            "jira_id",
             "created_at",
             "updated_at",
             "password",
@@ -70,7 +70,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             phone=validated_data.get("phone"),
             date_of_birth=validated_data.get("date_of_birth"),
             designation=validated_data["designation"],
-            jiraID=validated_data["jiraID"],
+            jira_id=validated_data["jira_id"],
             jira_access_token=validated_data.get("jira_access_token"),
         )
         return user

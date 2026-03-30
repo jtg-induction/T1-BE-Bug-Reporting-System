@@ -59,7 +59,7 @@ class EmailLinkGenerateAPIViewTestCase(APITestCase):
             "confirm_password": "123123",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
         }
@@ -94,7 +94,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "password",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
         }
         response = self.client.post(self.url, user_data)
@@ -112,7 +112,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "INVALID_PASSWORD",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
         }
@@ -131,7 +131,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "123123",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "date_of_birth": "1999-12-12",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
@@ -154,7 +154,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "123123",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
         }
@@ -163,7 +163,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
 
     def test_user_registration_without_jira(self):
         """
-        Test that registration fails if the required jiraID field is missing.
+        Test that registration fails if the required jira_id field is missing.
         """
         user_data = {
             "email": "test@testuser.com",
@@ -177,7 +177,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "token": self.token.verification_token,
         }
         response = self.client.post(self.url, user_data)
-        self.assertTrue("This field is required." in response.data["jiraID"])
+        self.assertTrue("This field is required." in response.data["jira_id"])
         self.assertEqual(400, response.status_code)
 
     def test_unique_email_validation(self):
@@ -192,7 +192,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "123123",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
         }
@@ -207,7 +207,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "123123",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
         }
@@ -226,7 +226,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "password",
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "date_of_birth": "12-12-1222",
             "token": self.token.verification_token,
@@ -246,7 +246,7 @@ class UserRegistrationAPIViewTestCase(APITestCase):
             "confirm_password": "password",
             "designation": "M",
             "phone": "12345",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "date_of_birth": "12-12-1222",
             "jira_access_token": "test_access_token",
             "token": self.token.verification_token,
@@ -277,7 +277,7 @@ class UserLoginAPIViewTestCase(APITestCase):
             "confirm_password": self.password,
             "designation": "M",
             "phone": "1234567890",
-            "jiraID": "abcd",
+            "jira_id": "abcd",
             "jira_access_token": "test_access_token",
             "token": token.verification_token,
         }

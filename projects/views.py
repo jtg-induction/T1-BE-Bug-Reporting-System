@@ -1,8 +1,8 @@
 import logging
-import pytz
 import re
 from datetime import datetime, timedelta
 
+import pytz
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.db.models import Count, F, Q, Subquery
@@ -139,7 +139,7 @@ class ProjectViewSet(
                 key=key,
                 name=title,
                 description=description,
-                lead_account_id=request.user.jiraID,
+                lead_account_id=request.user.jira_id,
             )
             jira_project_id = jira_response.get("id")
 
@@ -213,7 +213,7 @@ class ProjectViewSet(
                 key=key,
                 name=title,
                 description=description,
-                lead_account_id=request.user.jiraID,
+                lead_account_id=request.user.jira_id,
                 project_id=instance.jira_project_id,
             )
 
@@ -639,7 +639,9 @@ class ProjectViewSet(
         tz_name = self.request.headers.get("x-timezone")
 
         try:
-            user_tz = pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
+            user_tz = (
+                pytz.timezone(tz_name) if tz_name else timezone.get_default_timezone()
+            )
         except (pytz.UnknownTimeZoneError, AttributeError):
             user_tz = timezone.get_default_timezone()
 
@@ -752,8 +754,8 @@ class ProjectViewSet(
 
         if start_date and end_date and start_date > end_date:
             raise ParseError("Invalid Date Filters")
-        
-        user_tz = request.headers.get('x-timezone')
+
+        user_tz = request.headers.get("x-timezone")
         project_key = Project.objects.get(id=pk).key
 
         report_generator = ReportGenerator(
